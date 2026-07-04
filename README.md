@@ -38,7 +38,13 @@ noisy), the *Low Harm* / *High Harm* controls sweep along exactly that axis.
 
 ## How it works
 
-On each **Play** trigger:
+The plugin hosts **12 independent harmonizer buffers**. Each buffer holds one
+harmony — its own virtual fundamental and its own aleatoric partial draw — and
+is rendered to its **own mono output channel**, so every harmony can be
+routed, processed or spatialized separately (a master channel carries a mono
+mix of all of them).
+
+On each **Play** trigger (aimed at the buffer selected by *Buffer*):
 
 1. **Pitch detection** — the fundamental frequency `f_in` of the (mono) input
    is estimated over the last analysis window (normalized autocorrelation,
@@ -49,13 +55,16 @@ On each **Play** trigger:
 3. **Harmonization** — `Partials` other ranks are drawn (without replacement,
    from the same `[Low Harm, High Harm]` range, ≤ 34) and each spawns a voice
    at `f_k = f0 · rank_k`, i.e. a pitch shift of the live input by the just
-   ratio `rank_k / r`.
+   ratio `rank_k / r`. The draw (re)fills the *target buffer*; other buffers
+   keep sounding whatever they were playing, so successive Plays into
+   different buffers stack independent harmonies.
 4. **Resynthesis** — each voice is a phase-vocoder transposition of the live
-   input (STFT 2048, hop 512, Hann): the analysis stage estimates every bin's
-   magnitude and true frequency once per hop, each voice scatters those
-   partials to its pitch-scaled bins with its own running synthesis phase, the
-   voice spectra are summed (equal-power normalized, 1/√N) and a single
-   inverse FFT + overlap-add produces the wet signal.
+   input (STFT 2048, hop 512, Hann). The analysis stage — one forward FFT per
+   hop — is shared by all buffers; per buffer, each voice scatters the
+   analyzed partials to its pitch-scaled bins with its own running synthesis
+   phase, the voice spectra are summed (equal-power normalized, 1/√N) and one
+   inverse FFT + overlap-add per sounding buffer renders that buffer's mono
+   output.
 
 Because every voice is a *just* ratio of small-to-moderate integers over a
 common virtual fundamental, the resulting chord is a literal cutting of the
@@ -66,21 +75,34 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 
 | Control      | Range        | Function |
 |--------------|--------------|----------|
-| **Partials** | 1 – 12       | Number of harmonizer voices spawned on Play. Setting it back to **1 automatically resets the spectrum** (all voices cleared). |
+| **Buffer**   | 1 – 12       | Which harmonizer buffer *Play* and *Stop* target. |
+| **Partials** | 1 – 12       | Number of harmonized voices spawned in the target buffer on Play. Setting it back to **1 automatically resets the spectrum** (every buffer cleared). |
 | **Low Harm** | 1 – 34       | Lowest harmonic rank eligible for the aleatoric draw. |
 | **High Harm**| 1 – 34       | Highest harmonic rank eligible for the aleatoric draw. |
-| **Play**     | toggle (edge)| On a rising edge: detect the input pitch, draw its rank, spawn the voices. Toggle off/on to re-trigger (each Play replaces the current harmony with a new draw). |
-| **Voice**    | 1 – 12       | Selects which voice the *Stop* control silences. |
-| **Stop**     | toggle (edge)| Stops the voice selected by *Voice* (per-partial stop). |
-| **Stop All** | toggle (edge)| Stops every voice. |
-| **Dry/Wet**  | 0 – 1        | Crossfade between the live input and the harmonizer output. |
+| **Play**     | toggle (edge)| On a rising edge: detect the input pitch, draw its rank, (re)fill the target buffer. Toggle off/on to re-trigger; playing into an already-sounding buffer replaces its harmony. |
+| **Stop**     | toggle (edge)| Stops the buffer selected by *Buffer*. |
+| **Stop All** | toggle (edge)| Stops every buffer. |
+| **Dry/Wet**  | 0 – 1        | Crossfade, on the master channel only, between the live input and the mono mix of all buffers. |
 
 This maps the original message-based specification
-(`play <buffer> <number_of_harmonics> <low_harm> <high_harm>`, `stop` per
-partial, `stopAll`) onto plugin parameters: `number_of_harmonics`, `low_harm`
-and `high_harm` are read from the knobs at the moment Play fires; per-partial
-stop is the *Voice* + *Stop* pair; `stopAll` is *Stop All*. The audio input is
-mono (channel 0); the output is duplicated to all output channels.
+(`play <bufferNumber> <number_of_harmonics> <low_harm> <high_harm>`, `stop`
+per buffer, `stopAll`) onto plugin parameters: `bufferNumber` is the *Buffer*
+knob, and `number_of_harmonics`, `low_harm` and `high_harm` are read from the
+knobs at the moment Play fires.
+
+## Audio I/O
+
+- **Input**: 1 mono channel (the harmonizer source).
+- **Output**: 13 mono channels —
+  - channel **1**: master (mono mix of all buffers, normalized by
+    1/√(sounding buffers) and crossfaded with the dry input by *Dry/Wet*);
+  - channels **2 – 13**: buffers 1 – 12, each the pure (wet) output of one
+    harmony, always at full level regardless of *Dry/Wet*.
+
+In a DAW, put the plugin on a 13-channel track (e.g. in REAPER set the track
+channel count to 13 and open the plugin pin editor) to fan the buffers out to
+separate busses — e.g. for per-harmony spatialization. On a plain stereo
+track you will hear the master on channel 1 (and buffer 1 on channel 2).
 
 ## Download
 

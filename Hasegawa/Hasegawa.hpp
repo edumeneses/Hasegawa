@@ -23,8 +23,12 @@ constexpr int FFT_BINS = FFT_SIZE / 2 + 1;
 // Hasegawa (2009) limits tone representations to the first 34 partials:
 // "complex intervals created by higher integers are difficult to comprehend".
 constexpr int MAX_RANK = 34;
-// Up to 12 simultaneous harmonizer voices (partials) beyond the input pitch.
-constexpr int MAX_VOICES = 12;
+// Independent harmonizer buffers ("voices"), each with its own mono output.
+constexpr int MAX_BUFFERS = 12;
+// Up to 12 harmonized partials per buffer.
+constexpr int MAX_PARTIALS = 12;
+// Output channels: 1 master mix + one per buffer.
+constexpr int OUT_CHANNELS = 1 + MAX_BUFFERS;
 
 // --- PFFFT WRAPPER DECLARATION ---
 struct PFFFT_Wrapper {
@@ -81,82 +85,99 @@ struct Hasegawa {
 
     // Inputs (named struct so the UI can reference its members)
     struct inputs_t {
-        // Number of harmonizer voices spawned on Play (1..12). Setting it back
-        // to 1 automatically resets ("clears") the current spectrum.
-        halp::knob_f32<"Partials", halp::range{.min = 1.0f, .max = 12.0f, .init = 6.0f}> partials;
+        // Which harmonizer buffer Play / Stop targets (1..12). Each buffer is
+        // an independent harmony with its own mono output channel.
+        halp::knob_f32<"Buffer", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
+        // Number of harmonized partials spawned in the target buffer on Play
+        // (1..12). Setting it back to 1 automatically resets ("clears") the
+        // current spectrum: every buffer is silenced.
+        halp::knob_f32<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
         // Lowest / highest harmonic rank eligible for the aleatoric draw
         // (both the rank assigned to the input pitch and the harmonized
         // partials come from this range). High ranks obscure tonality.
         halp::knob_f32<"Low Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
         halp::knob_f32<"High Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
         // Rising edge = "play": detect the input pitch, draw a harmonic rank
-        // for it, and spawn Partials voices from the same harmonic series.
+        // for it, and (re)fill the target buffer with Partials voices from
+        // the same harmonic series.
         halp::toggle<"Play"> play;
-        // Which voice (1..12) the Stop toggle silences.
-        halp::knob_f32<"Voice", halp::range{.min = 1.0f, .max = 12.0f, .init = 1.0f}> voice_sel;
-        // Rising edge = stop the voice selected by Voice.
+        // Rising edge = stop the buffer selected by Buffer.
         halp::toggle<"Stop"> stop;
-        // Rising edge = stop every voice.
+        // Rising edge = stop every buffer.
         halp::toggle<"Stop All"> stop_all;
-        // Crossfade between the live input (dry) and the harmonizer (wet).
+        // Crossfade between the live input (dry) and the harmonizer mix (wet)
+        // on the master channel only; per-buffer outputs are always pure wet.
         halp::knob_f32<"Dry/Wet", halp::range{.min = 0.0f, .max = 1.0f, .init = 0.5f}> mix;
-        halp::audio_bus<"Input", float> audio_in;
+        halp::fixed_audio_bus<"Input", float, 1> audio_in;
     } inputs;
 
-    // Outputs
+    // Outputs: channel 1 = master (mono mix of all buffers, dry/wet applied),
+    // channels 2..13 = buffers 1..12, each a mono harmonizer output.
     struct {
-        halp::audio_bus<"Output", float> audio_out;
+        halp::fixed_audio_bus<"Output", float, OUT_CHANNELS> audio_out;
     } outputs;
 
-    // One harmonizer voice: a phase-vocoder transposition of the live input
+    // One harmonized partial: a phase-vocoder transposition of the live input
     // by ratio = own_rank / input_rank (both partials of the same virtual
     // fundamental).
-    struct Voice {
+    struct PartialVoice {
         bool active = false;
         int rank = 0;
         float ratio = 1.0f;
         std::vector<float> synth_phase; // FFT_BINS, advancing synthesis phase
     };
 
-    // Mono DSP state (input channel 0 is the harmonizer source).
+    // One harmonizer buffer: an independent harmony (own virtual fundamental,
+    // own partial draw) rendered to its own mono output channel.
+    struct Buffer {
+        std::array<PartialVoice, MAX_PARTIALS> partials;
+        std::vector<float> out_ring; // FFT_SIZE overlap-add accumulator
+
+        int num_active() const;
+        void stop();
+    };
+
+    // Mono DSP state; the STFT analysis of the input is shared by all buffers.
     struct State {
         std::vector<float> in_ring;   // FFT_SIZE rolling input buffer
         std::vector<float> window;    // FFT_SIZE Hann
         std::vector<float> td_buf;    // FFT_SIZE time-domain scratch
 
         std::vector<std::complex<float>> spec;     // analysis spectrum
-        std::vector<std::complex<float>> acc_spec; // summed voice spectra
+        std::vector<std::complex<float>> acc_spec; // summed partial spectra (per buffer)
         std::vector<float> mag;        // FFT_BINS, partial magnitude
         std::vector<float> tf;         // FFT_BINS, partial true frequency (in bins)
         std::vector<float> prev_phase; // FFT_BINS, previous analysis phase
         std::vector<float> out_mag;    // FFT_BINS, per-voice scatter scratch
         std::vector<float> out_tf;     // FFT_BINS, per-voice scatter scratch
 
-        std::vector<float> out_ring;   // FFT_SIZE overlap-add accumulator
-
         std::vector<float> pitch_buf;  // FFT_SIZE chronological copy for pitch detection
         std::vector<float> pitch_norm; // autocorrelation scratch
 
-        std::array<Voice, MAX_VOICES> voices;
+        std::array<Buffer, MAX_BUFFERS> buffers;
 
         PFFFT_Wrapper fft;
 
         int widx = 0;    // in_ring write index (also index of the oldest sample)
-        int ridx = 0;    // out_ring read index
+        int ridx = 0;    // out_ring read index (shared by all buffers)
         int hop_ctr = 0; // samples until the next STFT hop
+
+        // Smoothed master gain (1/sqrt(active buffers), one-pole).
+        float master_gain = 1.0f;
 
         State();
         void reset();
 
         // One STFT hop over the live input: magnitude + true frequency
-        // (phase-vocoder) of every bin.
+        // (phase-vocoder) of every bin. Shared by every buffer.
         void analyze();
-        // Scatter the analysis to each active voice's pitch-scaled bins, sum
-        // the voice spectra, inverse FFT, overlap-add into out_ring.
+        // Per buffer: scatter the analysis to each active partial's
+        // pitch-scaled bins, sum the partial spectra, inverse FFT,
+        // overlap-add into the buffer's out_ring.
         void synthesize();
 
-        int num_active() const;
-        void stop_all_voices();
+        int num_active_buffers() const;
+        void stop_all();
     };
 
     State state;
@@ -173,9 +194,9 @@ struct Hasegawa {
     void prepare(halp::setup info);
     void operator()(int frames);
 
-    // Detect input pitch, draw the input's harmonic rank and the voice ranks
-    // aleatorically, activate the voices.
-    void trigger_play(int partials, int low, int high);
+    // Detect the input pitch, draw the input's harmonic rank and the partial
+    // ranks aleatorically, and (re)fill the target buffer.
+    void trigger_play(int buffer_index, int partials, int low, int high);
 
     // UI
     struct ui {
@@ -185,11 +206,11 @@ struct Hasegawa {
         halp_meta(layout, vbox)
         halp_meta(background, mid)
 
+        halp::item<&inputs_t::buffer_sel> buffer_sel;
         halp::item<&inputs_t::partials> partials;
         halp::item<&inputs_t::low_harm> low_harm;
         halp::item<&inputs_t::high_harm> high_harm;
         halp::item<&inputs_t::play> play;
-        halp::item<&inputs_t::voice_sel> voice_sel;
         halp::item<&inputs_t::stop> stop;
         halp::item<&inputs_t::stop_all> stop_all;
         halp::item<&inputs_t::mix> mix;
