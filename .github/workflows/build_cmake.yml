@@ -1,0 +1,166 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ossia/actions' reusable avnd-addon workflow (used by the upstream template)
+# restricts reusable-workflow access to its own orgs, so an external fork can't
+# call it. This job replicates that workflow's VST3 build recipe self-contained:
+# build the Steinberg VST3 SDK from source; Linux = gcc, macOS = Apple clang,
+# Windows = MSVC; Boost from a release tarball; avendish + pffft fetched by CMake.
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { name: "Linux",   os: ubuntu-24.04,   triple: "linux-x86_64"   }
+          - { name: "macOS",   os: macos-15,       triple: "macos-arm64"    }
+          - { name: "Windows", os: windows-latest, triple: "windows-x86_64" }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt -y update
+          # gcc + VSTGUI's Linux deps (X11/XCB, cairo, freetype, fontconfig, xkb).
+          sudo apt install -yqq gcc-14 g++-14 jq zip \
+            libgl-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-util-dev \
+            libxcb-cursor-dev libxcb-keysyms1-dev libxcb-xkb-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libfontconfig1-dev libfreetype-dev libcairo2-dev libpango1.0-dev \
+            libwayland-dev wayland-protocols libgtkmm-3.0-dev
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install jq || true
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install -y jq zip ninja
+
+      # Put MSVC (cl/link) on PATH so we can build with Ninja instead of the
+      # Visual Studio generator, under which our compile flags don't propagate
+      # into SMTG's VSTGUI project.
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Checkout VST3 SDK
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          ref: v3.7.14_build_55
+          submodules: recursive
+          path: vst3sdk
+
+      - name: Set up Boost
+        shell: bash
+        run: |
+          curl -fsSL https://github.com/ossia/score-sdk/releases/download/sdk31/boost_1_90_0.tar.gz -o boost.tar.gz
+          mkdir -p boost/include
+          tar -xzf boost.tar.gz --strip-components=1 -C boost/include
+
+      - name: Configure & build
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          # Recent Xcode SDKs no longer transitively provide std::terminate to
+          # the VST3 SDK's threadchecker_mac.mm.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=( "-DCMAKE_CXX_FLAGS=-include exception" "-DCMAKE_OBJCXX_FLAGS=-include exception" )
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Ninja + MSVC (cl on PATH via msvc-dev-cmd): flags propagate into
+            # the VSTGUI subproject, unlike the Visual Studio generator.
+            EXTRA+=( -G Ninja "-DCMAKE_CXX_FLAGS=/Zc:preprocessor" )
+          fi
+
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_DEFAULT_CMP0077=NEW \
+            -DCMAKE_POLICY_DEFAULT_CMP0167=OLD \
+            -DVST3_SDK_ROOT="$PWD/vst3sdk" \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=ON \
+            -DSMTG_ADD_VSTGUI=ON \
+            -DAVND_ENABLE_VST3_VSTGUI=ON \
+            -DSMTG_CREATE_PLUGIN_LINK=OFF \
+            -DSMTG_RUN_VST_VALIDATOR=OFF \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DBOOST_ROOT="$PWD/boost" \
+            -DBoost_NO_BOOST_CMAKE=ON \
+            -DAVND_ENABLE_CLAP=OFF \
+            -DAVND_ENABLE_VINTAGE=OFF \
+            -DAVND_ENABLE_WASM=OFF \
+            -DAVND_ENABLE_GSTREAMER=OFF \
+            -DAVND_ENABLE_TOUCHDESIGNER=OFF \
+            -DAVND_ENABLE_FUZZ=OFF \
+            -DAVND_ENABLE_VST3=ON \
+            "${EXTRA[@]}"
+
+          cmake --build build --config Release --target avnd_hasegawa_vst3 --parallel
+
+      - name: Package VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p install
+          vst3="$(find build -name '*.vst3' -not -path '*/vst3sdk/*' | head -1)"
+          if [ -z "$vst3" ]; then
+            echo "No .vst3 produced under build/"; find build -name '*.vst3'; exit 1
+          fi
+          echo "Packaging: $vst3"
+          ( cd "$(dirname "$vst3")" && \
+            cmake -E tar cf "$GITHUB_WORKSPACE/install/Hasegawa-${{ matrix.config.triple }}.zip" \
+              --format=zip -- "$(basename "$vst3")" )
+
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.triple }}
+          path: install/*
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Combine
+        shell: bash
+        run: |
+          mkdir -p output
+          find . -name '*.zip' -exec mv {} output/ \;
+          ls -l output
+
+      - name: Upload to continuous prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "output/*"
+          tag_name: "continuous"
+          prerelease: true
+          name: "Continuous build"
+          body: "Rolling VST3 build from the latest commit on main."
