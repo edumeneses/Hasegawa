@@ -79,9 +79,9 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 | **Partials** | 1 – 12       | Number of harmonized voices spawned in the target buffer on Play. Setting it back to **1 automatically resets the spectrum** (every buffer cleared). |
 | **Low Harm** | 1 – 34       | Lowest harmonic rank eligible for the aleatoric draw. |
 | **High Harm**| 1 – 34       | Highest harmonic rank eligible for the aleatoric draw. |
-| **Play**     | toggle (edge)| On a rising edge: detect the input pitch, draw its rank, (re)fill the target buffer. Toggle off/on to re-trigger; playing into an already-sounding buffer replaces its harmony. |
-| **Stop**     | toggle (edge)| Stops the buffer selected by *Buffer*. |
-| **Stop All** | toggle (edge)| Stops every buffer. |
+| **Play**     | bang         | Detect the input pitch, draw its rank, (re)fill the target buffer. Each press re-triggers; playing into an already-sounding buffer replaces its harmony. |
+| **Stop**     | bang         | Stops the buffer selected by *Buffer*. |
+| **Stop All** | bang         | Stops every buffer. |
 | **Dry/Wet**  | 0 – 1        | Crossfade, on the master channel only, between the live input and the mono mix of all buffers. |
 
 This maps the original message-based specification

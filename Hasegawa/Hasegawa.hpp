@@ -98,11 +98,11 @@ struct Hasegawa {
         // Rising edge = "play": detect the input pitch, draw a harmonic rank
         // for it, and (re)fill the target buffer with Partials voices from
         // the same harmonic series.
-        halp::toggle<"Play"> play;
+        halp::maintained_button<"Play"> play;
         // Rising edge = stop the buffer selected by Buffer.
-        halp::toggle<"Stop"> stop;
+        halp::maintained_button<"Stop"> stop;
         // Rising edge = stop every buffer.
-        halp::toggle<"Stop All"> stop_all;
+        halp::maintained_button<"Stop All"> stop_all;
         // Crossfade between the live input (dry) and the harmonizer mix (wet)
         // on the master channel only; per-buffer outputs are always pure wet.
         halp::knob_f32<"Dry/Wet", halp::range{.min = 0.0f, .max = 1.0f, .init = 0.5f}> mix;
