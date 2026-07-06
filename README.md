@@ -92,17 +92,23 @@ knobs at the moment Play fires.
 
 ## Audio I/O
 
-- **Input**: 1 mono channel (the harmonizer source).
-- **Output**: 13 mono channels —
+The buses are dynamic — the plugin adapts to however many channels the host
+provides (a fixed 13-channel bus crashes hosts that hand the plugin a stereo
+buffer, so the channel count is negotiated instead):
+
+- **Input**: channel 1 is the harmonizer source (mono); extra input channels
+  are ignored.
+- **Output**, up to 13 channels used:
   - channel **1**: master (mono mix of all buffers, normalized by
     1/√(sounding buffers) and crossfaded with the dry input by *Dry/Wet*);
   - channels **2 – 13**: buffers 1 – 12, each the pure (wet) output of one
     harmony, always at full level regardless of *Dry/Wet*.
 
-In a DAW, put the plugin on a 13-channel track (e.g. in REAPER set the track
-channel count to 13 and open the plugin pin editor) to fan the buffers out to
-separate busses — e.g. for per-harmony spatialization. On a plain stereo
-track you will hear the master on channel 1 (and buffer 1 on channel 2).
+On a plain stereo track you hear the master on channel 1 (and buffer 1 on
+channel 2). For the full fan-out — e.g. per-harmony spatialization — give the
+plugin 13 channels: in REAPER, set the track channel count to 16 (nearest
+even ≥ 13) and route with the plugin pin editor; buffers without a host
+channel simply stay in the master mix.
 
 ## Download
 

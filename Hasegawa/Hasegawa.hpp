@@ -27,8 +27,6 @@ constexpr int MAX_RANK = 34;
 constexpr int MAX_BUFFERS = 12;
 // Up to 12 harmonized partials per buffer.
 constexpr int MAX_PARTIALS = 12;
-// Output channels: 1 master mix + one per buffer.
-constexpr int OUT_CHANNELS = 1 + MAX_BUFFERS;
 
 // --- PFFFT WRAPPER DECLARATION ---
 struct PFFFT_Wrapper {
@@ -108,13 +106,19 @@ struct Hasegawa {
         // Crossfade between the live input (dry) and the harmonizer mix (wet)
         // on the master channel only; per-buffer outputs are always pure wet.
         halp::knob_f32<"Dry/Wet", halp::range{.min = 0.0f, .max = 1.0f, .init = 0.5f}> mix;
-        halp::fixed_audio_bus<"Input", float, 1> audio_in;
+        // Dynamic buses: the host decides the channel count. Declaring a fixed
+        // 13-channel bus crashes when the host supplies fewer channels (the
+        // avendish fixed-bus adapter nulls the buffer pointers), so the plugin
+        // adapts instead: channel 0 of the input is the harmonizer source.
+        halp::audio_bus<"Input", float> audio_in;
     } inputs;
 
     // Outputs: channel 1 = master (mono mix of all buffers, dry/wet applied),
-    // channels 2..13 = buffers 1..12, each a mono harmonizer output.
+    // channels 2..13 = buffers 1..12, each a mono harmonizer output. Only the
+    // channels the host actually provides are written (set the track/bus to
+    // 13 channels to fan out every buffer).
     struct {
-        halp::fixed_audio_bus<"Output", float, OUT_CHANNELS> audio_out;
+        halp::audio_bus<"Output", float> audio_out;
     } outputs;
 
     // One harmonized partial: a phase-vocoder transposition of the live input

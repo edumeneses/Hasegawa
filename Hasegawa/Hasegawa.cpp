@@ -308,10 +308,17 @@ void Hasegawa::operator()(int frames) {
     prev_play = inputs.play.value;
 
     // --- audio ---
-    const float* in0 = inputs.audio_in.channel(0, frames).data();
+    // Dynamic buses: only touch the channels the host actually provides.
+    const int nch_in = inputs.audio_in.channels;
+    const int nch_out = outputs.audio_out.channels;
+    if (nch_out <= 0 || !outputs.audio_out.samples) return;
+
+    const float* in0 = (nch_in > 0 && inputs.audio_in.samples)
+                           ? inputs.audio_in.channel(0, frames).data()
+                           : nullptr;
     float* master = outputs.audio_out.channel(0, frames).data();
-    float* buf_out[MAX_BUFFERS];
-    for (int b = 0; b < MAX_BUFFERS; ++b)
+    float* buf_out[MAX_BUFFERS] = {};
+    for (int b = 0; b < MAX_BUFFERS && 1 + b < nch_out; ++b)
         buf_out[b] = outputs.audio_out.channel(1 + b, frames).data();
 
     // Master normalisation: 1/sqrt(sounding buffers), smoothed (~10 ms) to
@@ -334,14 +341,15 @@ void Hasegawa::operator()(int frames) {
             st.hop_ctr = 0;
         }
 
-        // 3. Pop the oldest synthesised sample of every buffer to its own
-        //    output channel, and sum them for the master.
+        // 3. Pop the oldest synthesised sample of every buffer (rings must
+        //    drain even when the host provides no channel for them) to its
+        //    own output channel, and sum them for the master.
         float sum = 0.0f;
         for (int b = 0; b < MAX_BUFFERS; ++b) {
             auto& ring = st.buffers[b].out_ring;
             const float wet = ring[st.ridx];
             ring[st.ridx] = 0.0f;
-            buf_out[b][i] = wet;
+            if (buf_out[b]) buf_out[b][i] = wet;
             sum += wet;
         }
         if (++st.ridx >= FFT_SIZE) st.ridx = 0;
