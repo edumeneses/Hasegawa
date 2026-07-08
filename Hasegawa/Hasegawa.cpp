@@ -252,8 +252,13 @@ void Hasegawa::trigger_play(int buffer_index, int partials, int low, int high) {
         if (idx >= FFT_SIZE) idx -= FFT_SIZE;
         st.pitch_buf[j] = st.in_ring[idx];
     }
-    const float f_in = detect_pitch(st.pitch_buf, st.pitch_norm, sample_rate);
-    if (f_in <= 0.0f) return; // no reliable pitch: keep the current harmony
+    float f_in = detect_pitch(st.pitch_buf, st.pitch_norm, sample_rate);
+    if (f_in > 0.0f)
+        last_f_in = f_in;
+    else if (last_f_in > 0.0f)
+        f_in = last_f_in; // unpitched right now: reuse the last detected pitch
+    else
+        return; // nothing ever detected: keep the current harmony
 
     // Aleatoric rank assignment: the incoming pitch becomes partial
     // `rank_in` of a virtual fundamental f0 = f_in / rank_in.

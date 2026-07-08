@@ -74,13 +74,21 @@ struct PFFFT_Wrapper {
     void inverse(const std::vector<std::complex<float>>& input_complex, std::vector<float>& output);
 };
 
-// A float knob that displays as an integer (the DSP rounds the value the same
-// way). Used for stepped controls (buffer, partial count, harmonic ranks) so
-// hosts and the plugin UI show "13" instead of "13.00".
-template <halp::static_string lit, auto setup>
-struct int_knob : halp::knob_f32<lit, setup> {
+// Float knobs that display as integers with a unit (the DSP rounds the value
+// the same way), so the UI readout says what the number means: "slot 3",
+// "rank 13", "6 voices" instead of "3.00".
+template <halp::static_string lit, halp::static_string unit, auto setup>
+struct unit_knob : halp::knob_f32<lit, setup> {
     static void display(char* buf, float v) {
-        std::snprintf(buf, 16, "%d", (int)std::lround(v));
+        std::snprintf(buf, 32, "%s %d", unit.value, (int)std::lround(v));
+    }
+};
+
+template <halp::static_string lit, auto setup>
+struct voices_knob : halp::knob_f32<lit, setup> {
+    static void display(char* buf, float v) {
+        const int n = (int)std::lround(v);
+        std::snprintf(buf, 32, "%d voice%s", n, n == 1 ? "" : "s");
     }
 };
 
@@ -97,16 +105,16 @@ struct Hasegawa {
     struct inputs_t {
         // Which harmonizer buffer Play / Stop targets (1..12). Each buffer is
         // an independent harmony with its own mono output channel.
-        int_knob<"Buffer", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
+        unit_knob<"Buffer", "slot", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
         // Number of harmonized partials spawned in the target buffer on Play
         // (1..12). Setting it back to 1 automatically resets ("clears") the
         // current spectrum: every buffer is silenced.
-        int_knob<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
+        voices_knob<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
         // Lowest / highest harmonic rank eligible for the aleatoric draw
         // (both the rank assigned to the input pitch and the harmonized
         // partials come from this range). High ranks obscure tonality.
-        int_knob<"Low Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
-        int_knob<"High Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
+        unit_knob<"Low Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
+        unit_knob<"High Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
         // Rising edge = "play": detect the input pitch, draw a harmonic rank
         // for it, and (re)fill the target buffer with Partials voices from
         // the same harmonic series.
@@ -200,6 +208,9 @@ struct Hasegawa {
     double sample_rate = 48000.0;
     std::mt19937 rng{std::random_device{}()};
     std::vector<int> rank_pool; // scratch for the aleatoric draw
+    // Last successfully detected input pitch: Play falls back to it when the
+    // input is momentarily unpitched (e.g. between notes).
+    float last_f_in = 0.0f;
 
     // Control edge detection (block rate)
     bool prev_play = false;
