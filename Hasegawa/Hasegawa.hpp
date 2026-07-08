@@ -7,7 +7,9 @@
 #include <halp/layout.hpp>
 
 #include <array>
+#include <cmath>
 #include <complex>
+#include <cstdio>
 #include <random>
 #include <vector>
 
@@ -72,6 +74,16 @@ struct PFFFT_Wrapper {
     void inverse(const std::vector<std::complex<float>>& input_complex, std::vector<float>& output);
 };
 
+// A float knob that displays as an integer (the DSP rounds the value the same
+// way). Used for stepped controls (buffer, partial count, harmonic ranks) so
+// hosts and the plugin UI show "13" instead of "13.00".
+template <halp::static_string lit, auto setup>
+struct int_knob : halp::knob_f32<lit, setup> {
+    static void display(char* buf, float v) {
+        std::snprintf(buf, 16, "%d", (int)std::lround(v));
+    }
+};
+
 // --- PLUGIN STRUCT DECLARATION ---
 struct Hasegawa {
     halp_meta(name, "Hasegawa")
@@ -85,16 +97,16 @@ struct Hasegawa {
     struct inputs_t {
         // Which harmonizer buffer Play / Stop targets (1..12). Each buffer is
         // an independent harmony with its own mono output channel.
-        halp::knob_f32<"Buffer", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
+        int_knob<"Buffer", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
         // Number of harmonized partials spawned in the target buffer on Play
         // (1..12). Setting it back to 1 automatically resets ("clears") the
         // current spectrum: every buffer is silenced.
-        halp::knob_f32<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
+        int_knob<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
         // Lowest / highest harmonic rank eligible for the aleatoric draw
         // (both the rank assigned to the input pitch and the harmonized
         // partials come from this range). High ranks obscure tonality.
-        halp::knob_f32<"Low Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
-        halp::knob_f32<"High Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
+        int_knob<"Low Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
+        int_knob<"High Harm", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
         // Rising edge = "play": detect the input pitch, draw a harmonic rank
         // for it, and (re)fill the target buffer with Partials voices from
         // the same harmonic series.
