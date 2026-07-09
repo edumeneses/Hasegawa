@@ -8,36 +8,37 @@ with [Avendish](https://github.com/celtera/avendish) using
 
 ## Concept
 
-The plugin implements a harmonizer based on Robert Hasegawa's *virtual
-fundamental* idea (Hasegawa 2006; 2008; 2009): the incoming pitch is assigned
-a harmonic rank **aleatorically**, then harmonized with up to 12 other pitches
-selected from the same harmonic series — but high enough in the series that
-the sense of "tonality" may be obscured. Each of the 12 harmonized pitches is
-an individually switchable voice with its own output channel.
+Robert Hasegawa (2006; 2008; 2009) has proposed that complex harmonies, such
+as those found in Schoenberg and Grisey, can be understood as upper partials
+of a hypothetical *virtual fundamental*. This plugin turns that analytical
+model into a real-time instrument: the incoming pitch is aleatorically
+assigned a harmonic rank, and the plugin harmonizes it with up to 12
+additional pitches drawn from the same harmonic series; when the ranks sit
+high enough in the series, the sense of tonality may become obscured. Each of
+the 12 harmonized pitches is an individually switchable voice with its own
+output channel.
 
-Hasegawa has suggested that complex harmonies, such as those used by
-Schoenberg and Grisey, can be analyzed as upper partials of a hypothetical
-**virtual fundamental**. Since the ideal harmonic series is infinite, it is a
-truism that any combination of notes can be analyzed as harmonics of *some*
-fundamental — but this sort of analysis is only relevant within a finite range
-determined by human auditory perception. Adopting Hasegawa's nomenclature,
-Eb1(13:17:18:20) may be a relevant representation of a complex harmony, but
-Eb-3(73:98:112:157) is not, because its hypothetical fundamental is well
-outside the range of human hearing and the relations among its designated
-partials are too complex to be intelligible. Hasegawa, recognizing that
-"complex intervals created by higher integers are difficult to comprehend,"
-limits his tone representations to the first **34 partials** (2009) — as does
-this plugin.
+Since the ideal harmonic series is infinite, any combination of notes can be
+described as harmonics of some fundamental; the analysis only becomes
+musically meaningful, however, within a finite range determined by auditory
+perception. In Hasegawa's nomenclature, Eb1(13:17:18:20) can be a relevant
+representation of a complex harmony, while Eb-3(73:98:112:157) cannot: its
+hypothetical fundamental falls well below the range of human hearing, and the
+relations among its designated partials are too complex to be intelligible.
+Recognizing that intervals built from higher integers become difficult to
+comprehend, Hasegawa limits his tone representations to the first 34 partials
+(2009); the plugin adopts the same limit.
 
-The hypothesis this instrument plays with: complex harmonies that can be
-analyzed as partials of a hypothetical virtual fundamental within a
-perceptually relevant range will exhibit a greater degree of perceptual
-coherence — a sort of **"virtual toneness"** — while those that cannot will
-exhibit less coherence — **"virtual noisiness."** This extends the tone–noise
-axis employed by composers such as Lachenmann and Saariaho into the realm of
-spectral implication described by Hasegawa. By drawing the harmonic ranks from
-low in the series (strong fusion, quasi-tonal) or high in the series (obscure,
-noisy), the *Low Harm* / *High Harm* controls sweep along exactly that axis.
+The instrument explores the hypothesis that complex harmonies analyzable as
+partials of a virtual fundamental, within a perceptually relevant range,
+exhibit a greater degree of perceptual coherence, a quality we can call
+*virtual toneness*; harmonies that resist such analysis exhibit less
+coherence, or *virtual noisiness*. In other words, the instrument extends the
+tone-noise axis explored by composers such as Lachenmann and Saariaho into
+the domain of spectral implication described by Hasegawa. Drawing the
+harmonic ranks from low in the series produces strong fusion and quasi-tonal
+sonorities; drawing them from high in the series produces obscure, noisy
+ones; the *Low Harm* and *High Harm* controls sweep along exactly that axis.
 
 ## How it works
 
@@ -143,15 +144,6 @@ which mirrors ossia's `avnd-addon` recipe and produces the rolling release.
 (The upstream template drives CI from ossia's reusable workflow; that
 workflow's access is org-restricted, so this fork ships an equivalent
 self-contained build instead.)
-
-## Known issue
-
-VST3 UIs built from this template can crash *on UI open* inside
-[ossia/score](https://github.com/ossia/score) on Linux while working fine in
-Reaper — see [ossia/score#2023](https://github.com/ossia/score/issues/2023).
-This is a host-side dynamic-link / Qt-runtime collision in score's VST3 UI
-hosting, not a fault of the plugin itself (the same binaries load correctly in
-other hosts).
 
 ## References
 
