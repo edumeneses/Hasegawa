@@ -4,6 +4,8 @@ A **virtual-fundamental harmonizer** audio plugin (phase-vocoder based), built
 with [Avendish](https://github.com/celtera/avendish) using
 [TimeMachine](https://github.com/edumeneses/TimeMachine) as a template.
 
+![Hasegawa plugin UI](docs/hasegawa-ui.png)
+
 ## Concept
 
 The plugin implements a harmonizer based on Robert Hasegawa's *virtual
