@@ -53,79 +53,22 @@ static inline float wrap_phase(float x) {
     return x - PI;
 }
 
-// Monophonic pitch detection over one analysis window: normalized
-// autocorrelation, first strong local peak (avoids octave-down errors),
-// parabolic interpolation of the lag. Returns 0 when no reliable pitch.
-static float detect_pitch(const std::vector<float>& x, std::vector<float>& nacf, double sr) {
-    const int N = (int)x.size();
-    const int min_lag = std::max(2, (int)(sr / 2000.0)); // 2 kHz ceiling
-    const int max_lag = std::min(N / 2, (int)(sr / 50.0)); // 50 Hz floor
-    if (max_lag <= min_lag + 1) return 0.0f;
-
-    double energy = 0.0;
-    for (int n = 0; n < N; ++n) energy += (double)x[n] * x[n];
-    if (energy < 1e-6) return 0.0f; // silence
-
-    std::fill(nacf.begin(), nacf.end(), 0.0f);
-    float best = 0.0f;
-    for (int lag = min_lag; lag <= max_lag; ++lag) {
-        double r = 0.0, e1 = 0.0, e2 = 0.0;
-        for (int n = 0; n + lag < N; ++n) {
-            r  += (double)x[n] * x[n + lag];
-            e1 += (double)x[n] * x[n];
-            e2 += (double)x[n + lag] * x[n + lag];
-        }
-        float v = (float)(r / (std::sqrt(e1 * e2) + 1e-12));
-        nacf[lag] = v;
-        if (v > best) best = v;
-    }
-    if (best < 0.5f) return 0.0f; // too aperiodic to call it a pitch
-
-    int peak = -1;
-    for (int lag = min_lag + 1; lag < max_lag; ++lag) {
-        if (nacf[lag] >= 0.9f * best && nacf[lag] >= nacf[lag - 1] && nacf[lag] >= nacf[lag + 1]) {
-            peak = lag;
-            break;
-        }
-    }
-    if (peak < 0) return 0.0f;
-
-    const float a = nacf[peak - 1], b = nacf[peak], c = nacf[peak + 1];
-    const float denom = a - 2.0f * b + c;
-    const float delta = (denom != 0.0f) ? std::clamp(0.5f * (a - c) / denom, -1.0f, 1.0f) : 0.0f;
-    return (float)(sr / (peak + delta));
-}
-
-// --- Hasegawa::Buffer ---
-
-int Hasegawa::Buffer::num_active() const {
-    int n = 0;
-    for (const auto& v : partials) n += v.active ? 1 : 0;
-    return n;
-}
-
-void Hasegawa::Buffer::stop() {
-    for (auto& v : partials) v.active = false;
-}
-
 // --- Hasegawa::State ---
 
 Hasegawa::State::State() : fft(FFT_SIZE) {
     in_ring.resize(FFT_SIZE, 0.0f);
     td_buf.resize(FFT_SIZE, 0.0f);
     spec.resize(FFT_BINS);
-    acc_spec.resize(FFT_BINS);
+    voice_spec.resize(FFT_BINS);
     mag.resize(FFT_BINS, 0.0f);
     tf.resize(FFT_BINS, 0.0f);
     prev_phase.resize(FFT_BINS, 0.0f);
     out_mag.resize(FFT_BINS, 0.0f);
     out_tf.resize(FFT_BINS, 0.0f);
-    pitch_buf.resize(FFT_SIZE, 0.0f);
-    pitch_norm.resize(FFT_SIZE / 2 + 1, 0.0f);
 
-    for (auto& b : buffers) {
-        b.out_ring.resize(FFT_SIZE, 0.0f);
-        for (auto& v : b.partials) v.synth_phase.resize(FFT_BINS, 0.0f);
+    for (auto& v : voices) {
+        v.synth_phase.resize(FFT_BINS, 0.0f);
+        v.out_ring.resize(FFT_SIZE, 0.0f);
     }
 
     window.resize(FFT_SIZE);
@@ -137,12 +80,10 @@ Hasegawa::State::State() : fft(FFT_SIZE) {
 void Hasegawa::State::reset() {
     std::fill(in_ring.begin(), in_ring.end(), 0.0f);
     std::fill(prev_phase.begin(), prev_phase.end(), 0.0f);
-    for (auto& b : buffers) {
-        std::fill(b.out_ring.begin(), b.out_ring.end(), 0.0f);
-        for (auto& v : b.partials) {
-            v.active = false;
-            std::fill(v.synth_phase.begin(), v.synth_phase.end(), 0.0f);
-        }
+    for (auto& v : voices) {
+        v.active = false;
+        std::fill(v.synth_phase.begin(), v.synth_phase.end(), 0.0f);
+        std::fill(v.out_ring.begin(), v.out_ring.end(), 0.0f);
     }
     widx = 0;
     ridx = 0;
@@ -150,14 +91,14 @@ void Hasegawa::State::reset() {
     master_gain = 1.0f;
 }
 
-int Hasegawa::State::num_active_buffers() const {
+int Hasegawa::State::num_active() const {
     int n = 0;
-    for (const auto& b : buffers) n += (b.num_active() > 0) ? 1 : 0;
+    for (const auto& v : voices) n += v.active ? 1 : 0;
     return n;
 }
 
 void Hasegawa::State::stop_all() {
-    for (auto& b : buffers) b.stop();
+    for (auto& v : voices) v.active = false;
 }
 
 void Hasegawa::State::analyze() {
@@ -188,47 +129,38 @@ void Hasegawa::State::synthesize() {
     const float TWO_PI = 2.0f * std::numbers::pi_v<float>;
     const float gain_comp = 2.0f / 3.0f; // Hann^2 @ 75% overlap -> 1.5
 
-    // Each buffer renders its own harmony from the shared analysis into its
-    // own overlap-add ring (one inverse FFT per sounding buffer).
-    for (auto& b : buffers) {
-        const int n = b.num_active();
-        if (n == 0) continue;
+    // Phase-vocoder transpose per voice: scatter each analysis partial to its
+    // pitch-scaled bin, advance that bin's phase at the target frequency, and
+    // render into the voice's own overlap-add ring (one inverse FFT per open
+    // voice, since each has its own output channel).
+    for (auto& v : voices) {
+        if (!v.active) continue;
 
-        // Equal-power normalisation so stacking partials doesn't clip.
-        const float norm = 1.0f / std::sqrt((float)n);
-
-        std::fill(acc_spec.begin(), acc_spec.end(), std::complex<float>{0.0f, 0.0f});
-
-        // Phase-vocoder transpose per partial: scatter each analysis partial
-        // to its pitch-scaled bin, advance that bin's phase at the target
-        // frequency, and accumulate into the buffer's output spectrum.
-        for (auto& v : b.partials) {
-            if (!v.active) continue;
-
-            std::fill(out_mag.begin(), out_mag.end(), 0.0f);
-            for (int k = 0; k < FFT_BINS; ++k) {
-                if (mag[k] <= 0.0f) continue;
-                float tgt = tf[k] * v.ratio;
-                int tb = (int)std::lround(tgt);
-                if (tb >= 0 && tb < FFT_BINS) {
-                    out_mag[tb] += mag[k];
-                    out_tf[tb] = tgt;
-                }
+        std::fill(out_mag.begin(), out_mag.end(), 0.0f);
+        for (int k = 0; k < FFT_BINS; ++k) {
+            if (mag[k] <= 0.0f) continue;
+            float tgt = tf[k] * v.ratio;
+            int tb = (int)std::lround(tgt);
+            if (tb >= 0 && tb < FFT_BINS) {
+                out_mag[tb] += mag[k];
+                out_tf[tb] = tgt;
             }
-            for (int tb = 0; tb < FFT_BINS; ++tb) {
-                if (out_mag[tb] > 0.0f) {
-                    v.synth_phase[tb] = wrap_phase(v.synth_phase[tb] + TWO_PI * out_tf[tb] * HOP_SIZE / FFT_SIZE);
-                    acc_spec[tb] += std::polar(out_mag[tb] * norm, v.synth_phase[tb]);
-                }
+        }
+        for (int tb = 0; tb < FFT_BINS; ++tb) {
+            if (out_mag[tb] > 0.0f) {
+                v.synth_phase[tb] = wrap_phase(v.synth_phase[tb] + TWO_PI * out_tf[tb] * HOP_SIZE / FFT_SIZE);
+                voice_spec[tb] = std::polar(out_mag[tb], v.synth_phase[tb]);
+            } else {
+                voice_spec[tb] = {0.0f, 0.0f};
             }
         }
 
-        fft.inverse(acc_spec, td_buf);
+        fft.inverse(voice_spec, td_buf);
 
         for (int j = 0; j < FFT_SIZE; ++j) {
             int idx = ridx + j;
             if (idx >= FFT_SIZE) idx -= FFT_SIZE;
-            b.out_ring[idx] += td_buf[j] * window[j] * gain_comp;
+            v.out_ring[idx] += td_buf[j] * window[j] * gain_comp;
         }
     }
 }
@@ -239,96 +171,99 @@ void Hasegawa::prepare(halp::setup info) {
     sample_rate = (info.rate > 0.0) ? info.rate : 48000.0;
     state.reset();
     rank_pool.reserve(MAX_RANK);
-    prev_play = prev_stop = prev_stop_all = false;
-    last_partials = 0;
+    anchor_rank = 0;
+    prev_p.fill(false);
+    prev_stop_all = false;
 }
 
-void Hasegawa::trigger_play(int buffer_index, int partials, int low, int high) {
+void Hasegawa::open_voice(int i, int low, int high) {
     auto& st = state;
 
-    // Pitch of the incoming note, from the most recent analysis window.
-    for (int j = 0; j < FFT_SIZE; ++j) {
-        int idx = st.widx + j;
-        if (idx >= FFT_SIZE) idx -= FFT_SIZE;
-        st.pitch_buf[j] = st.in_ring[idx];
-    }
-    float f_in = detect_pitch(st.pitch_buf, st.pitch_norm, sample_rate);
-    if (f_in > 0.0f)
-        last_f_in = f_in;
-    else if (last_f_in > 0.0f)
-        f_in = last_f_in; // unpitched right now: reuse the last detected pitch
-    else
-        return; // nothing ever detected: keep the current harmony
+    // Aleatoric anchor: the incoming pitch is assigned harmonic rank
+    // `anchor_rank` of a virtual fundamental f0 = f_input / anchor_rank.
+    // Drawn when the first voice opens; held while any voice is open so all
+    // partials belong to one series.
+    if (st.num_active() == 0)
+        anchor_rank = std::uniform_int_distribution<int>(low, high)(rng);
 
-    // Aleatoric rank assignment: the incoming pitch becomes partial
-    // `rank_in` of a virtual fundamental f0 = f_in / rank_in.
-    std::uniform_int_distribution<int> pick(low, high);
-    const int rank_in = pick(rng);
-
-    // The harmonized pitches are OTHER partials of that same series, drawn
-    // without replacement from [low, high].
+    // Draw this voice's rank: prefer ranks distinct from the anchor and from
+    // every open voice; relax step by step if the range is too narrow.
     rank_pool.clear();
+    auto in_use = [&](int r) {
+        for (const auto& v : st.voices)
+            if (v.active && v.rank == r) return true;
+        return false;
+    };
     for (int r = low; r <= high; ++r)
-        if (r != rank_in) rank_pool.push_back(r);
-    std::shuffle(rank_pool.begin(), rank_pool.end(), rng);
-    if (rank_pool.empty()) rank_pool.push_back(rank_in); // low == high: unison
+        if (r != anchor_rank && !in_use(r)) rank_pool.push_back(r);
+    if (rank_pool.empty())
+        for (int r = low; r <= high; ++r)
+            if (!in_use(r)) rank_pool.push_back(r);
 
-    const int n = std::min<int>(partials, (int)rank_pool.size());
+    int rank;
+    if (!rank_pool.empty())
+        rank = rank_pool[std::uniform_int_distribution<int>(0, (int)rank_pool.size() - 1)(rng)];
+    else
+        rank = std::uniform_int_distribution<int>(low, high)(rng);
 
-    // A new Play replaces whatever this buffer was holding.
-    auto& buf = st.buffers[buffer_index];
-    buf.stop();
-    for (int i = 0; i < n; ++i) {
-        auto& v = buf.partials[i];
-        v.active = true;
-        v.rank = rank_pool[i];
-        // f_partial = f0 * rank = f_in * (rank / rank_in)
-        v.ratio = (float)v.rank / (float)rank_in;
-        std::fill(v.synth_phase.begin(), v.synth_phase.end(), 0.0f);
-    }
+    auto& v = st.voices[i];
+    v.active = true;
+    v.rank = rank;
+    // f_voice = f0 * rank = f_input * (rank / anchor_rank)
+    v.ratio = (float)rank / (float)anchor_rank;
+    std::fill(v.synth_phase.begin(), v.synth_phase.end(), 0.0f);
+}
+
+void Hasegawa::close_voice(int i) {
+    state.voices[i].active = false;
+    // All voices closed: the next opening starts a fresh series.
+    if (state.num_active() == 0)
+        anchor_rank = 0;
 }
 
 void Hasegawa::operator()(int frames) {
-    const float mix = inputs.mix.value;
-
-    // --- control edges, once per block ---
-    const int buf_idx = std::clamp((int)std::lround(inputs.buffer_sel.value), 1, MAX_BUFFERS) - 1;
-    const int partials = std::clamp((int)std::lround(inputs.partials.value), 1, MAX_PARTIALS);
-    int low  = std::clamp((int)std::lround(inputs.low_harm.value), 1, MAX_RANK);
-    int high = std::clamp((int)std::lround(inputs.high_harm.value), 1, MAX_RANK);
-    if (low > high) std::swap(low, high);
-
-    // "spectrum automatically reset at 1": turning Partials down to 1
-    // clears whatever harmony is currently sounding, in every buffer.
-    if (partials == 1 && last_partials > 1) state.stop_all();
-    last_partials = partials;
-
-    if (inputs.stop_all.value && !prev_stop_all) state.stop_all();
-    prev_stop_all = inputs.stop_all.value;
-
-    if (inputs.stop.value && !prev_stop) state.buffers[buf_idx].stop();
-    prev_stop = inputs.stop.value;
-
-    if (inputs.play.value && !prev_play) trigger_play(buf_idx, partials, low, high);
-    prev_play = inputs.play.value;
-
-    // --- audio ---
-    // Dynamic buses: only touch the channels the host actually provides.
     const int nch_in = inputs.audio_in.channels;
     const int nch_out = outputs.audio_out.channels;
     if (nch_out <= 0 || !outputs.audio_out.samples) return;
 
+    const float mix = inputs.mix.value;
+
+    // --- control edges, once per block ---
+    int low  = std::clamp((int)std::lround(inputs.low_harm.value), 1, MAX_RANK);
+    int high = std::clamp((int)std::lround(inputs.high_harm.value), 1, MAX_RANK);
+    if (low > high) std::swap(low, high);
+
+    if (inputs.stop_all.value && !prev_stop_all) {
+        state.stop_all();
+        anchor_rank = 0;
+    }
+    prev_stop_all = inputs.stop_all.value;
+
+    const bool cur[MAX_PARTIALS] = {
+        inputs.p1.value,  inputs.p2.value,  inputs.p3.value,  inputs.p4.value,
+        inputs.p5.value,  inputs.p6.value,  inputs.p7.value,  inputs.p8.value,
+        inputs.p9.value,  inputs.p10.value, inputs.p11.value, inputs.p12.value,
+    };
+    for (int i = 0; i < MAX_PARTIALS; ++i) {
+        // Edge-triggered: after Stop All, a toggle left on stays closed until
+        // it is cycled off and on again.
+        if (cur[i] && !prev_p[i]) open_voice(i, low, high);
+        else if (!cur[i] && prev_p[i]) close_voice(i);
+        prev_p[i] = cur[i];
+    }
+
+    // --- audio: mono processing on input channel 0 ---
     const float* in0 = (nch_in > 0 && inputs.audio_in.samples)
                            ? inputs.audio_in.channel(0, frames).data()
                            : nullptr;
     float* master = outputs.audio_out.channel(0, frames).data();
-    float* buf_out[MAX_BUFFERS] = {};
-    for (int b = 0; b < MAX_BUFFERS && 1 + b < nch_out; ++b)
-        buf_out[b] = outputs.audio_out.channel(1 + b, frames).data();
+    float* voice_out[MAX_PARTIALS] = {};
+    for (int i = 0; i < MAX_PARTIALS && 1 + i < nch_out; ++i)
+        voice_out[i] = outputs.audio_out.channel(1 + i, frames).data();
 
-    // Master normalisation: 1/sqrt(sounding buffers), smoothed (~10 ms) to
-    // avoid steps when buffers start or stop.
-    const float target_gain = 1.0f / std::sqrt((float)std::max(1, state.num_active_buffers()));
+    // Master normalisation: 1/sqrt(open voices), smoothed (~10 ms) to avoid
+    // steps when voices open or close.
+    const float target_gain = 1.0f / std::sqrt((float)std::max(1, state.num_active()));
     const float smooth = 1.0f - std::exp(-1.0f / (0.010f * (float)sample_rate));
 
     auto& st = state;
@@ -346,20 +281,20 @@ void Hasegawa::operator()(int frames) {
             st.hop_ctr = 0;
         }
 
-        // 3. Pop the oldest synthesised sample of every buffer (rings must
+        // 3. Pop the oldest synthesised sample of every voice (rings must
         //    drain even when the host provides no channel for them) to its
         //    own output channel, and sum them for the master.
         float sum = 0.0f;
-        for (int b = 0; b < MAX_BUFFERS; ++b) {
-            auto& ring = st.buffers[b].out_ring;
+        for (int v = 0; v < MAX_PARTIALS; ++v) {
+            auto& ring = st.voices[v].out_ring;
             const float wet = ring[st.ridx];
             ring[st.ridx] = 0.0f;
-            if (buf_out[b]) buf_out[b][i] = wet;
+            if (voice_out[v]) voice_out[v][i] = wet;
             sum += wet;
         }
         if (++st.ridx >= FFT_SIZE) st.ridx = 0;
 
-        // 4. Master: dry/wet crossfade against the normalised buffer mix.
+        // 4. Master: dry/wet crossfade against the normalised voice mix.
         st.master_gain += smooth * (target_gain - st.master_gain);
         master[i] = (dry * (1.0f - mix)) + (sum * st.master_gain * mix);
     }

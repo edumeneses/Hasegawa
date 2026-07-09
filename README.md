@@ -10,7 +10,8 @@ The plugin implements a harmonizer based on Robert Hasegawa's *virtual
 fundamental* idea (Hasegawa 2006; 2008; 2009): the incoming pitch is assigned
 a harmonic rank **aleatorically**, then harmonized with up to 12 other pitches
 selected from the same harmonic series — but high enough in the series that
-the sense of "tonality" may be obscured.
+the sense of "tonality" may be obscured. Each of the 12 harmonized pitches is
+an individually switchable voice with its own output channel.
 
 Hasegawa has suggested that complex harmonies, such as those used by
 Schoenberg and Grisey, can be analyzed as upper partials of a hypothetical
@@ -38,33 +39,31 @@ noisy), the *Low Harm* / *High Harm* controls sweep along exactly that axis.
 
 ## How it works
 
-The plugin hosts **12 independent harmonizer buffers**. Each buffer holds one
-harmony — its own virtual fundamental and its own aleatoric partial draw — and
-is rendered to its **own mono output channel**, so every harmony can be
-routed, processed or spatialized separately (a master channel carries a mono
-mix of all of them).
+The plugin is a **real-time harmonizer** with **12 individually switchable
+partials**, each rendered to its **own mono output channel** (a master channel
+carries a mono mix). Nothing is recorded or frozen: an open partial
+continuously pitch-shifts the live input until it is closed.
 
-On each **Play** trigger (aimed at the buffer selected by *Buffer*):
-
-1. **Pitch detection** — the fundamental frequency `f_in` of the (mono) input
-   is estimated over the last analysis window (normalized autocorrelation,
-   50 Hz – 2 kHz, with a confidence threshold: unpitched input is ignored).
-2. **Aleatoric rank assignment** — a harmonic rank `r` is drawn uniformly at
-   random from `[Low Harm, High Harm]`. The incoming pitch is *declared* to be
-   partial `r` of a virtual fundamental `f0 = f_in / r`.
-3. **Harmonization** — `Partials` other ranks are drawn (without replacement,
-   from the same `[Low Harm, High Harm]` range, ≤ 34) and each spawns a voice
-   at `f_k = f0 · rank_k`, i.e. a pitch shift of the live input by the just
-   ratio `rank_k / r`. The draw (re)fills the *target buffer*; other buffers
-   keep sounding whatever they were playing, so successive Plays into
-   different buffers stack independent harmonies.
-4. **Resynthesis** — each voice is a phase-vocoder transposition of the live
+1. **Aleatoric anchor** — when the first partial opens, a harmonic rank
+   `r` (the *anchor*) is drawn uniformly at random from
+   `[Low Harm, High Harm]`. The incoming pitch is *declared* to be partial
+   `r` of a virtual fundamental `f0 = f_input / r`. The anchor holds as long
+   as at least one partial is open, so everything sounding belongs to one
+   series; it is cleared when all partials close (or on *Stop All*).
+2. **Opening a partial** — toggling *Partial N* on draws that voice's rank
+   `rank_N` from the same `[Low Harm, High Harm]` range (distinct from the
+   anchor and from the other open partials whenever the range allows) and
+   opens a voice at `f_N = f0 · rank_N`: a pitch shift of the live input by
+   the just ratio `rank_N / r`. Toggling it off closes the voice.
+3. **Resynthesis** — each voice is a phase-vocoder transposition of the live
    input (STFT 2048, hop 512, Hann). The analysis stage — one forward FFT per
-   hop — is shared by all buffers; per buffer, each voice scatters the
-   analyzed partials to its pitch-scaled bins with its own running synthesis
-   phase, the voice spectra are summed (equal-power normalized, 1/√N) and one
-   inverse FFT + overlap-add per sounding buffer renders that buffer's mono
-   output.
+   hop — is shared by all voices; each open voice scatters the analyzed
+   spectrum to its pitch-scaled bins with its own running synthesis phase and
+   renders through its own inverse FFT + overlap-add to its own channel.
+
+The ratios are pure rank arithmetic (`rank_N / r`), so the harmonizer tracks
+whatever the input does — dynamics, timbre, glissandi — as parallel just-ratio
+transposition, in real time (latency: one STFT window, ~43 ms at 48 kHz).
 
 Because every voice is a *just* ratio of small-to-moderate integers over a
 common virtual fundamental, the resulting chord is a literal cutting of the
@@ -73,22 +72,20 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 
 ## Controls
 
-| Control      | Range        | Function |
-|--------------|--------------|----------|
-| **Buffer**   | 1 – 12       | Which harmonizer buffer *Play* and *Stop* target. |
-| **Partials** | 1 – 12       | Number of harmonized voices spawned in the target buffer on Play. Setting it back to **1 automatically resets the spectrum** (every buffer cleared). |
-| **Low Harm** | 1 – 34       | Lowest harmonic rank eligible for the aleatoric draw. |
-| **High Harm**| 1 – 34       | Highest harmonic rank eligible for the aleatoric draw. |
-| **Play**     | bang         | Detect the input pitch, draw its rank, (re)fill the target buffer. Each press re-triggers; playing into an already-sounding buffer replaces its harmony. |
-| **Stop**     | bang         | Stops the buffer selected by *Buffer*. |
-| **Stop All** | bang         | Stops every buffer. |
-| **Dry/Wet**  | 0 – 1        | Crossfade, on the master channel only, between the live input and the mono mix of all buffers. |
+| Control            | Range  | Function |
+|--------------------|--------|----------|
+| **Low Harm**       | 1 – 34 | Lowest harmonic rank eligible for the aleatoric draw. |
+| **High Harm**      | 1 – 34 | Highest harmonic rank eligible for the aleatoric draw. |
+| **Partial 1 – 12** | toggle | On: draw a rank and open that voice (real-time harmonization of the live input on its own output channel). Off: close it. Cycle off/on to redraw. |
+| **Stop All**       | bang   | Closes every partial and clears the series anchor. Partial toggles left on stay closed until cycled off/on. |
+| **Dry/Wet**        | 0 – 1  | Crossfade, on the master channel only, between the live input and the mono mix of all partials. |
 
 This maps the original message-based specification
 (`play <bufferNumber> <number_of_harmonics> <low_harm> <high_harm>`, `stop`
-per buffer, `stopAll`) onto plugin parameters: `bufferNumber` is the *Buffer*
-knob, and `number_of_harmonics`, `low_harm` and `high_harm` are read from the
-knobs at the moment Play fires.
+per partial, `stopAll`) onto plugin parameters: each partial toggle plays or
+stops one voice (`bufferNumber` = which toggle; `number_of_harmonics` = how
+many toggles you open), and `low_harm` / `high_harm` are read from the knobs
+at the moment a partial opens.
 
 ## Audio I/O
 
@@ -99,15 +96,15 @@ buffer, so the channel count is negotiated instead):
 - **Input**: channel 1 is the harmonizer source (mono); extra input channels
   are ignored.
 - **Output**, up to 13 channels used:
-  - channel **1**: master (mono mix of all buffers, normalized by
-    1/√(sounding buffers) and crossfaded with the dry input by *Dry/Wet*);
-  - channels **2 – 13**: buffers 1 – 12, each the pure (wet) output of one
-    harmony, always at full level regardless of *Dry/Wet*.
+  - channel **1**: master (mono mix of all partials, normalized by
+    1/√(open partials) and crossfaded with the dry input by *Dry/Wet*);
+  - channels **2 – 13**: partials 1 – 12, each the pure (wet) output of one
+    voice, always at full level regardless of *Dry/Wet*.
 
-On a plain stereo track you hear the master on channel 1 (and buffer 1 on
-channel 2). For the full fan-out — e.g. per-harmony spatialization — give the
+On a plain stereo track you hear the master on channel 1 (and partial 1 on
+channel 2). For the full fan-out — e.g. per-partial spatialization — give the
 plugin 13 channels: in REAPER, set the track channel count to 16 (nearest
-even ≥ 13) and route with the plugin pin editor; buffers without a host
+even ≥ 13) and route with the plugin pin editor; partials without a host
 channel simply stay in the master mix.
 
 ## Download

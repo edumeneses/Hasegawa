@@ -25,9 +25,7 @@ constexpr int FFT_BINS = FFT_SIZE / 2 + 1;
 // Hasegawa (2009) limits tone representations to the first 34 partials:
 // "complex intervals created by higher integers are difficult to comprehend".
 constexpr int MAX_RANK = 34;
-// Independent harmonizer buffers ("voices"), each with its own mono output.
-constexpr int MAX_BUFFERS = 12;
-// Up to 12 harmonized partials per buffer.
+// Individually switchable harmonized partials, each with its own mono output.
 constexpr int MAX_PARTIALS = 12;
 
 // --- PFFFT WRAPPER DECLARATION ---
@@ -75,20 +73,12 @@ struct PFFFT_Wrapper {
 };
 
 // Float knobs that display as integers with a unit (the DSP rounds the value
-// the same way), so the UI readout says what the number means: "slot 3",
-// "rank 13", "6 voices" instead of "3.00".
+// the same way), so the UI readout says what the number means: "rank 13"
+// instead of "13.00".
 template <halp::static_string lit, halp::static_string unit, auto setup>
 struct unit_knob : halp::knob_f32<lit, setup> {
     static void display(char* buf, float v) {
         std::snprintf(buf, 32, "%s %d", unit.value, (int)std::lround(v));
-    }
-};
-
-template <halp::static_string lit, auto setup>
-struct voices_knob : halp::knob_f32<lit, setup> {
-    static void display(char* buf, float v) {
-        const int n = (int)std::lround(v);
-        std::snprintf(buf, 32, "%d voice%s", n, n == 1 ? "" : "s");
     }
 };
 
@@ -103,104 +93,99 @@ struct Hasegawa {
 
     // Inputs (named struct so the UI can reference its members)
     struct inputs_t {
-        // Which harmonizer buffer Play / Stop targets (1..12). Each buffer is
-        // an independent harmony with its own mono output channel.
-        unit_knob<"Buffer", "slot", halp::range{.min = 1.0f, .max = (float)MAX_BUFFERS, .init = 1.0f}> buffer_sel;
-        // Number of harmonized partials spawned in the target buffer on Play
-        // (1..12). Setting it back to 1 automatically resets ("clears") the
-        // current spectrum: every buffer is silenced.
-        voices_knob<"Partials", halp::range{.min = 1.0f, .max = (float)MAX_PARTIALS, .init = 6.0f}> partials;
         // Lowest / highest harmonic rank eligible for the aleatoric draw
         // (both the rank assigned to the input pitch and the harmonized
         // partials come from this range). High ranks obscure tonality.
         unit_knob<"Low Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
         unit_knob<"High Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
-        // Rising edge = "play": detect the input pitch, draw a harmonic rank
-        // for it, and (re)fill the target buffer with Partials voices from
-        // the same harmonic series.
-        halp::maintained_button<"Play"> play;
-        // Rising edge = stop the buffer selected by Buffer.
-        halp::maintained_button<"Stop"> stop;
-        // Rising edge = stop every buffer.
+
+        // One toggle per harmonized partial: on = draw a harmonic rank in
+        // [Low Harm, High Harm] from the shared virtual-fundamental series
+        // and open that voice (a real-time pitch-shifted copy of the input on
+        // its own output channel); off = close it. The series anchor (the
+        // rank assigned to the incoming pitch) is drawn when the first voice
+        // opens and holds until every voice is closed, so all open partials
+        // belong to one virtual fundamental.
+        halp::toggle<"Partial 1">  p1;
+        halp::toggle<"Partial 2">  p2;
+        halp::toggle<"Partial 3">  p3;
+        halp::toggle<"Partial 4">  p4;
+        halp::toggle<"Partial 5">  p5;
+        halp::toggle<"Partial 6">  p6;
+        halp::toggle<"Partial 7">  p7;
+        halp::toggle<"Partial 8">  p8;
+        halp::toggle<"Partial 9">  p9;
+        halp::toggle<"Partial 10"> p10;
+        halp::toggle<"Partial 11"> p11;
+        halp::toggle<"Partial 12"> p12;
+
+        // Bang: close every partial and clear the series anchor. Partial
+        // toggles left on must be cycled off/on to reopen.
         halp::maintained_button<"Stop All"> stop_all;
         // Crossfade between the live input (dry) and the harmonizer mix (wet)
-        // on the master channel only; per-buffer outputs are always pure wet.
+        // on the master channel only; per-partial outputs are always pure wet.
         halp::knob_f32<"Dry/Wet", halp::range{.min = 0.0f, .max = 1.0f, .init = 0.5f}> mix;
-        // Dynamic buses: the host decides the channel count. Declaring a fixed
-        // 13-channel bus crashes when the host supplies fewer channels (the
-        // avendish fixed-bus adapter nulls the buffer pointers), so the plugin
-        // adapts instead: channel 0 of the input is the harmonizer source.
+        // Dynamic buses: the host decides the channel count (a fixed
+        // 13-channel bus crashes hosts that provide fewer channels). Channel
+        // 0 of the input is the harmonizer source.
         halp::audio_bus<"Input", float> audio_in;
     } inputs;
 
-    // Outputs: channel 1 = master (mono mix of all buffers, dry/wet applied),
-    // channels 2..13 = buffers 1..12, each a mono harmonizer output. Only the
-    // channels the host actually provides are written (set the track/bus to
-    // 13 channels to fan out every buffer).
+    // Outputs: channel 1 = master (mono mix of all partials, dry/wet
+    // applied), channels 2..13 = partials 1..12, each a mono voice. Only the
+    // channels the host actually provides are written (give the plugin 13
+    // channels to fan out every partial).
     struct {
         halp::audio_bus<"Output", float> audio_out;
     } outputs;
 
     // One harmonized partial: a phase-vocoder transposition of the live input
-    // by ratio = own_rank / input_rank (both partials of the same virtual
-    // fundamental).
+    // by ratio = own_rank / anchor_rank (both partials of the same virtual
+    // fundamental), rendered to its own mono output channel.
     struct PartialVoice {
         bool active = false;
         int rank = 0;
         float ratio = 1.0f;
         std::vector<float> synth_phase; // FFT_BINS, advancing synthesis phase
+        std::vector<float> out_ring;    // FFT_SIZE overlap-add accumulator
     };
 
-    // One harmonizer buffer: an independent harmony (own virtual fundamental,
-    // own partial draw) rendered to its own mono output channel.
-    struct Buffer {
-        std::array<PartialVoice, MAX_PARTIALS> partials;
-        std::vector<float> out_ring; // FFT_SIZE overlap-add accumulator
-
-        int num_active() const;
-        void stop();
-    };
-
-    // Mono DSP state; the STFT analysis of the input is shared by all buffers.
+    // Mono DSP state; the STFT analysis of the input is shared by all voices.
     struct State {
         std::vector<float> in_ring;   // FFT_SIZE rolling input buffer
         std::vector<float> window;    // FFT_SIZE Hann
         std::vector<float> td_buf;    // FFT_SIZE time-domain scratch
 
         std::vector<std::complex<float>> spec;     // analysis spectrum
-        std::vector<std::complex<float>> acc_spec; // summed partial spectra (per buffer)
+        std::vector<std::complex<float>> voice_spec; // per-voice output spectrum
         std::vector<float> mag;        // FFT_BINS, partial magnitude
         std::vector<float> tf;         // FFT_BINS, partial true frequency (in bins)
         std::vector<float> prev_phase; // FFT_BINS, previous analysis phase
         std::vector<float> out_mag;    // FFT_BINS, per-voice scatter scratch
         std::vector<float> out_tf;     // FFT_BINS, per-voice scatter scratch
 
-        std::vector<float> pitch_buf;  // FFT_SIZE chronological copy for pitch detection
-        std::vector<float> pitch_norm; // autocorrelation scratch
-
-        std::array<Buffer, MAX_BUFFERS> buffers;
+        std::array<PartialVoice, MAX_PARTIALS> voices;
 
         PFFFT_Wrapper fft;
 
         int widx = 0;    // in_ring write index (also index of the oldest sample)
-        int ridx = 0;    // out_ring read index (shared by all buffers)
+        int ridx = 0;    // out_ring read index (shared by all voices)
         int hop_ctr = 0; // samples until the next STFT hop
 
-        // Smoothed master gain (1/sqrt(active buffers), one-pole).
+        // Smoothed master gain (1/sqrt(active voices), one-pole).
         float master_gain = 1.0f;
 
         State();
         void reset();
 
         // One STFT hop over the live input: magnitude + true frequency
-        // (phase-vocoder) of every bin. Shared by every buffer.
+        // (phase-vocoder) of every bin. Shared by every voice.
         void analyze();
-        // Per buffer: scatter the analysis to each active partial's
-        // pitch-scaled bins, sum the partial spectra, inverse FFT,
-        // overlap-add into the buffer's out_ring.
+        // Per active voice: scatter the analysis to its pitch-scaled bins,
+        // inverse FFT, overlap-add into the voice's out_ring.
         void synthesize();
 
-        int num_active_buffers() const;
+        int num_active() const;
         void stop_all();
     };
 
@@ -208,22 +193,24 @@ struct Hasegawa {
     double sample_rate = 48000.0;
     std::mt19937 rng{std::random_device{}()};
     std::vector<int> rank_pool; // scratch for the aleatoric draw
-    // Last successfully detected input pitch: Play falls back to it when the
-    // input is momentarily unpitched (e.g. between notes).
-    float last_f_in = 0.0f;
+
+    // The harmonic rank aleatorically assigned to the incoming pitch: the
+    // virtual fundamental is f0 = f_input / anchor_rank, so every open voice
+    // (ratio rank/anchor_rank) is a partial of that same series. 0 = no
+    // anchor; drawn when the first voice opens.
+    int anchor_rank = 0;
 
     // Control edge detection (block rate)
-    bool prev_play = false;
-    bool prev_stop = false;
+    std::array<bool, MAX_PARTIALS> prev_p{};
     bool prev_stop_all = false;
-    int last_partials = 0;
 
     void prepare(halp::setup info);
     void operator()(int frames);
 
-    // Detect the input pitch, draw the input's harmonic rank and the partial
-    // ranks aleatorically, and (re)fill the target buffer.
-    void trigger_play(int buffer_index, int partials, int low, int high);
+    // Draw a rank for voice i (distinct from the anchor and from the other
+    // open voices when possible) and open it.
+    void open_voice(int i, int low, int high);
+    void close_voice(int i);
 
     // UI
     struct ui {
@@ -233,12 +220,20 @@ struct Hasegawa {
         halp_meta(layout, vbox)
         halp_meta(background, mid)
 
-        halp::item<&inputs_t::buffer_sel> buffer_sel;
-        halp::item<&inputs_t::partials> partials;
         halp::item<&inputs_t::low_harm> low_harm;
         halp::item<&inputs_t::high_harm> high_harm;
-        halp::item<&inputs_t::play> play;
-        halp::item<&inputs_t::stop> stop;
+        halp::item<&inputs_t::p1> p1;
+        halp::item<&inputs_t::p2> p2;
+        halp::item<&inputs_t::p3> p3;
+        halp::item<&inputs_t::p4> p4;
+        halp::item<&inputs_t::p5> p5;
+        halp::item<&inputs_t::p6> p6;
+        halp::item<&inputs_t::p7> p7;
+        halp::item<&inputs_t::p8> p8;
+        halp::item<&inputs_t::p9> p9;
+        halp::item<&inputs_t::p10> p10;
+        halp::item<&inputs_t::p11> p11;
+        halp::item<&inputs_t::p12> p12;
         halp::item<&inputs_t::stop_all> stop_all;
         halp::item<&inputs_t::mix> mix;
     };
