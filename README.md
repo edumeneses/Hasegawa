@@ -145,6 +145,10 @@ which mirrors ossia's `avnd-addon` recipe and produces the rolling release.
 workflow's access is org-restricted, so this fork ships an equivalent
 self-contained build instead.)
 
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
 ## References
 
 - Hasegawa, R. (2006). "Tone Representation and Just Intervals in
