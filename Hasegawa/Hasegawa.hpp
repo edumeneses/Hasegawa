@@ -93,14 +93,8 @@ struct Hasegawa {
 
     // Inputs (named struct so the UI can reference its members)
     struct inputs_t {
-        // Lowest / highest harmonic rank eligible for the aleatoric draw
-        // (both the rank assigned to the input pitch and the harmonized
-        // partials come from this range). High ranks obscure tonality.
-        unit_knob<"Low Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
-        unit_knob<"High Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
-
-        // One toggle per harmonized partial: on = draw a harmonic rank in
-        // [Low Harm, High Harm] from the shared virtual-fundamental series
+        // One toggle per harmonized partial: on = pick a harmonic rank (see
+        // Random N / Rank N below) from the shared virtual-fundamental series
         // and open that voice (a real-time pitch-shifted copy of the input on
         // its own output channel); off = close it. The series anchor (the
         // rank assigned to the incoming pitch) is drawn when the first voice
@@ -118,6 +112,43 @@ struct Hasegawa {
         halp::toggle<"Partial 10"> p10;
         halp::toggle<"Partial 11"> p11;
         halp::toggle<"Partial 12"> p12;
+
+        // Per-partial rank mode: on (default) = the rank is drawn
+        // aleatorically in [Low Harm, High Harm] when the partial opens;
+        // off = the partial uses its Rank N knob, and follows it live.
+        halp::toggle<"Random 1",  halp::toggle_setup{.init = true}> rnd1;
+        halp::toggle<"Random 2",  halp::toggle_setup{.init = true}> rnd2;
+        halp::toggle<"Random 3",  halp::toggle_setup{.init = true}> rnd3;
+        halp::toggle<"Random 4",  halp::toggle_setup{.init = true}> rnd4;
+        halp::toggle<"Random 5",  halp::toggle_setup{.init = true}> rnd5;
+        halp::toggle<"Random 6",  halp::toggle_setup{.init = true}> rnd6;
+        halp::toggle<"Random 7",  halp::toggle_setup{.init = true}> rnd7;
+        halp::toggle<"Random 8",  halp::toggle_setup{.init = true}> rnd8;
+        halp::toggle<"Random 9",  halp::toggle_setup{.init = true}> rnd9;
+        halp::toggle<"Random 10", halp::toggle_setup{.init = true}> rnd10;
+        halp::toggle<"Random 11", halp::toggle_setup{.init = true}> rnd11;
+        halp::toggle<"Random 12", halp::toggle_setup{.init = true}> rnd12;
+
+        // Manually chosen harmonic rank per partial, used when Random N is
+        // off. Not constrained by [Low Harm, High Harm].
+        unit_knob<"Rank 1",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> rank1;
+        unit_knob<"Rank 2",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 14.0f}> rank2;
+        unit_knob<"Rank 3",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 15.0f}> rank3;
+        unit_knob<"Rank 4",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 16.0f}> rank4;
+        unit_knob<"Rank 5",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 17.0f}> rank5;
+        unit_knob<"Rank 6",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 18.0f}> rank6;
+        unit_knob<"Rank 7",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 19.0f}> rank7;
+        unit_knob<"Rank 8",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 20.0f}> rank8;
+        unit_knob<"Rank 9",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 21.0f}> rank9;
+        unit_knob<"Rank 10", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 22.0f}> rank10;
+        unit_knob<"Rank 11", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 23.0f}> rank11;
+        unit_knob<"Rank 12", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 24.0f}> rank12;
+
+        // Lowest / highest harmonic rank eligible for the aleatoric draws
+        // (the anchor rank assigned to the input pitch, and every partial in
+        // Random mode). High ranks obscure tonality.
+        unit_knob<"Low Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> low_harm;
+        unit_knob<"High Harm", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = (float)MAX_RANK}> high_harm;
 
         // Bang: close every partial and clear the series anchor. Partial
         // toggles left on must be cycled off/on to reopen.
@@ -207,9 +238,9 @@ struct Hasegawa {
     void prepare(halp::setup info);
     void operator()(int frames);
 
-    // Draw a rank for voice i (distinct from the anchor and from the other
-    // open voices when possible) and open it.
-    void open_voice(int i, int low, int high);
+    // Open voice i: draw its rank aleatorically (distinct from the anchor
+    // and from the other open voices when possible) or take the manual rank.
+    void open_voice(int i, int low, int high, bool random, int manual_rank);
     void close_voice(int i);
 
     // UI
@@ -220,8 +251,6 @@ struct Hasegawa {
         halp_meta(layout, vbox)
         halp_meta(background, mid)
 
-        halp::item<&inputs_t::low_harm> low_harm;
-        halp::item<&inputs_t::high_harm> high_harm;
         halp::item<&inputs_t::p1> p1;
         halp::item<&inputs_t::p2> p2;
         halp::item<&inputs_t::p3> p3;
@@ -234,6 +263,32 @@ struct Hasegawa {
         halp::item<&inputs_t::p10> p10;
         halp::item<&inputs_t::p11> p11;
         halp::item<&inputs_t::p12> p12;
+        halp::item<&inputs_t::rnd1> rnd1;
+        halp::item<&inputs_t::rnd2> rnd2;
+        halp::item<&inputs_t::rnd3> rnd3;
+        halp::item<&inputs_t::rnd4> rnd4;
+        halp::item<&inputs_t::rnd5> rnd5;
+        halp::item<&inputs_t::rnd6> rnd6;
+        halp::item<&inputs_t::rnd7> rnd7;
+        halp::item<&inputs_t::rnd8> rnd8;
+        halp::item<&inputs_t::rnd9> rnd9;
+        halp::item<&inputs_t::rnd10> rnd10;
+        halp::item<&inputs_t::rnd11> rnd11;
+        halp::item<&inputs_t::rnd12> rnd12;
+        halp::item<&inputs_t::rank1> rank1;
+        halp::item<&inputs_t::rank2> rank2;
+        halp::item<&inputs_t::rank3> rank3;
+        halp::item<&inputs_t::rank4> rank4;
+        halp::item<&inputs_t::rank5> rank5;
+        halp::item<&inputs_t::rank6> rank6;
+        halp::item<&inputs_t::rank7> rank7;
+        halp::item<&inputs_t::rank8> rank8;
+        halp::item<&inputs_t::rank9> rank9;
+        halp::item<&inputs_t::rank10> rank10;
+        halp::item<&inputs_t::rank11> rank11;
+        halp::item<&inputs_t::rank12> rank12;
+        halp::item<&inputs_t::low_harm> low_harm;
+        halp::item<&inputs_t::high_harm> high_harm;
         halp::item<&inputs_t::stop_all> stop_all;
         halp::item<&inputs_t::mix> mix;
     };

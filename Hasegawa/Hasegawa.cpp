@@ -176,7 +176,7 @@ void Hasegawa::prepare(halp::setup info) {
     prev_stop_all = false;
 }
 
-void Hasegawa::open_voice(int i, int low, int high) {
+void Hasegawa::open_voice(int i, int low, int high, bool random, int manual_rank) {
     auto& st = state;
 
     // Aleatoric anchor: the incoming pitch is assigned harmonic rank
@@ -186,25 +186,29 @@ void Hasegawa::open_voice(int i, int low, int high) {
     if (st.num_active() == 0)
         anchor_rank = std::uniform_int_distribution<int>(low, high)(rng);
 
-    // Draw this voice's rank: prefer ranks distinct from the anchor and from
-    // every open voice; relax step by step if the range is too narrow.
-    rank_pool.clear();
-    auto in_use = [&](int r) {
-        for (const auto& v : st.voices)
-            if (v.active && v.rank == r) return true;
-        return false;
-    };
-    for (int r = low; r <= high; ++r)
-        if (r != anchor_rank && !in_use(r)) rank_pool.push_back(r);
-    if (rank_pool.empty())
-        for (int r = low; r <= high; ++r)
-            if (!in_use(r)) rank_pool.push_back(r);
-
     int rank;
-    if (!rank_pool.empty())
-        rank = rank_pool[std::uniform_int_distribution<int>(0, (int)rank_pool.size() - 1)(rng)];
-    else
-        rank = std::uniform_int_distribution<int>(low, high)(rng);
+    if (random) {
+        // Draw this voice's rank: prefer ranks distinct from the anchor and
+        // from every open voice; relax step by step if the range is narrow.
+        rank_pool.clear();
+        auto in_use = [&](int r) {
+            for (const auto& v : st.voices)
+                if (v.active && v.rank == r) return true;
+            return false;
+        };
+        for (int r = low; r <= high; ++r)
+            if (r != anchor_rank && !in_use(r)) rank_pool.push_back(r);
+        if (rank_pool.empty())
+            for (int r = low; r <= high; ++r)
+                if (!in_use(r)) rank_pool.push_back(r);
+
+        if (!rank_pool.empty())
+            rank = rank_pool[std::uniform_int_distribution<int>(0, (int)rank_pool.size() - 1)(rng)];
+        else
+            rank = std::uniform_int_distribution<int>(low, high)(rng);
+    } else {
+        rank = std::clamp(manual_rank, 1, MAX_RANK);
+    }
 
     auto& v = st.voices[i];
     v.active = true;
@@ -244,12 +248,33 @@ void Hasegawa::operator()(int frames) {
         inputs.p5.value,  inputs.p6.value,  inputs.p7.value,  inputs.p8.value,
         inputs.p9.value,  inputs.p10.value, inputs.p11.value, inputs.p12.value,
     };
+    const bool rnd[MAX_PARTIALS] = {
+        inputs.rnd1.value,  inputs.rnd2.value,  inputs.rnd3.value,  inputs.rnd4.value,
+        inputs.rnd5.value,  inputs.rnd6.value,  inputs.rnd7.value,  inputs.rnd8.value,
+        inputs.rnd9.value,  inputs.rnd10.value, inputs.rnd11.value, inputs.rnd12.value,
+    };
+    const float rank_knob[MAX_PARTIALS] = {
+        inputs.rank1.value,  inputs.rank2.value,  inputs.rank3.value,  inputs.rank4.value,
+        inputs.rank5.value,  inputs.rank6.value,  inputs.rank7.value,  inputs.rank8.value,
+        inputs.rank9.value,  inputs.rank10.value, inputs.rank11.value, inputs.rank12.value,
+    };
     for (int i = 0; i < MAX_PARTIALS; ++i) {
+        const int manual = std::clamp((int)std::lround(rank_knob[i]), 1, MAX_RANK);
+
         // Edge-triggered: after Stop All, a toggle left on stays closed until
         // it is cycled off and on again.
-        if (cur[i] && !prev_p[i]) open_voice(i, low, high);
+        if (cur[i] && !prev_p[i]) open_voice(i, low, high, rnd[i], manual);
         else if (!cur[i] && prev_p[i]) close_voice(i);
         prev_p[i] = cur[i];
+
+        // Manual mode follows its Rank knob live (an open voice retunes when
+        // the knob moves; a randomly drawn rank is kept once the toggle
+        // switches to Random until the voice is reopened).
+        auto& v = state.voices[i];
+        if (v.active && !rnd[i] && v.rank != manual) {
+            v.rank = manual;
+            v.ratio = (float)manual / (float)anchor_rank;
+        }
     }
 
     // --- audio: mono processing on input channel 0 ---

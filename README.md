@@ -53,11 +53,13 @@ continuously pitch-shifts the live input until it is closed.
    `r` of a virtual fundamental `f0 = f_input / r`. The anchor holds as long
    as at least one partial is open, so everything sounding belongs to one
    series; it is cleared when all partials close (or on *Stop All*).
-2. **Opening a partial** — toggling *Partial N* on draws that voice's rank
-   `rank_N` from the same `[Low Harm, High Harm]` range (distinct from the
-   anchor and from the other open partials whenever the range allows) and
-   opens a voice at `f_N = f0 · rank_N`: a pitch shift of the live input by
-   the just ratio `rank_N / r`. Toggling it off closes the voice.
+2. **Opening a partial** — toggling *Partial N* on picks that voice's rank
+   `rank_N` and opens a voice at `f_N = f0 · rank_N`: a pitch shift of the
+   live input by the just ratio `rank_N / r`. In *Random* mode (default) the
+   rank is drawn from the same `[Low Harm, High Harm]` range, distinct from
+   the anchor and from the other open partials whenever the range allows; in
+   manual mode the rank comes from the *Rank N* knob, and the open voice
+   follows the knob live. Toggling the partial off closes the voice.
 3. **Resynthesis** — each voice is a phase-vocoder transposition of the live
    input (STFT 2048, hop 512, Hann). The analysis stage — one forward FFT per
    hop — is shared by all voices; each open voice scatters the analyzed
@@ -79,7 +81,9 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 |--------------------|--------|----------|
 | **Low Harm**       | 1 – 34 | Lowest harmonic rank eligible for the aleatoric draw. |
 | **High Harm**      | 1 – 34 | Highest harmonic rank eligible for the aleatoric draw. |
-| **Partial 1 – 12** | toggle | On: draw a rank and open that voice (real-time harmonization of the live input on its own output channel). Off: close it. Cycle off/on to redraw. |
+| **Partial 1 – 12** | toggle | On: pick a rank (see *Random N* / *Rank N*) and open that voice (real-time harmonization of the live input on its own output channel). Off: close it. Cycle off/on to redraw. |
+| **Random 1 – 12**  | toggle | Rank mode per partial. On (default): the rank is drawn aleatorically in [*Low Harm*, *High Harm*] when the partial opens. Off: the partial uses its *Rank N* knob. |
+| **Rank 1 – 12**    | 1 – 34 | Manually chosen harmonic rank, used when *Random N* is off; an open partial follows this knob live. Not constrained by [*Low Harm*, *High Harm*]. |
 | **Stop All**       | bang   | Closes every partial and clears the series anchor. Partial toggles left on stay closed until cycled off/on. |
 | **Dry/Wet**        | 0 – 1  | Crossfade, on the master channel only, between the live input and the mono mix of all partials. |
 
