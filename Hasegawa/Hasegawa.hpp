@@ -82,6 +82,15 @@ struct unit_knob : halp::knob_f32<lit, setup> {
     }
 };
 
+// Same integer readout without the unit, for knobs whose caption already
+// names it (the "Rank N" knobs would otherwise read "Rank 1" / "rank 13").
+template <halp::static_string lit, auto setup>
+struct int_knob : halp::knob_f32<lit, setup> {
+    static void display(char* buf, float v) {
+        std::snprintf(buf, 32, "%d", (int)std::lround(v));
+    }
+};
+
 // --- PLUGIN STRUCT DECLARATION ---
 struct Hasegawa {
     halp_meta(name, "Hasegawa")
@@ -91,58 +100,59 @@ struct Hasegawa {
     halp_meta(description, "Virtual-fundamental harmonizer after Robert Hasegawa")
     halp_meta(uuid, "b4d2c8f1-6a3e-4b5d-9c7f-2e8a1d0b3f6c")
 
-    // Inputs (named struct so the UI can reference its members)
+    // Inputs (named struct so the UI can reference its members). Declaration
+    // order is the VST3 parameter order, which the generated editor lays out
+    // as a row-major grid; keep each partial's three controls together.
     struct inputs_t {
-        // One toggle per harmonized partial: on = pick a harmonic rank (see
-        // Random N / Rank N below) from the shared virtual-fundamental series
-        // and open that voice (a real-time pitch-shifted copy of the input on
-        // its own output channel); off = close it. The series anchor (the
-        // rank assigned to the incoming pitch) is drawn when the first voice
-        // opens and holds until every voice is closed, so all open partials
-        // belong to one virtual fundamental.
+        // Per partial, three controls:
+        //  - Partial N: on = pick a harmonic rank (see Random N / Rank N) from
+        //    the shared virtual-fundamental series and open that voice (a
+        //    real-time pitch-shifted copy of the input on its own output
+        //    channel); off = close it. The series anchor (the rank assigned
+        //    to the incoming pitch) is drawn when the first voice opens and
+        //    holds until every voice is closed, so all open partials belong
+        //    to one virtual fundamental.
+        //  - Random N: on (default) = the rank is drawn aleatorically in
+        //    [Low Harm, High Harm] when the partial opens; off = the partial
+        //    uses its Rank N knob, and follows it live.
+        //  - Rank N: manually chosen harmonic rank, used when Random N is
+        //    off. Not constrained by [Low Harm, High Harm].
         halp::toggle<"Partial 1">  p1;
-        halp::toggle<"Partial 2">  p2;
-        halp::toggle<"Partial 3">  p3;
-        halp::toggle<"Partial 4">  p4;
-        halp::toggle<"Partial 5">  p5;
-        halp::toggle<"Partial 6">  p6;
-        halp::toggle<"Partial 7">  p7;
-        halp::toggle<"Partial 8">  p8;
-        halp::toggle<"Partial 9">  p9;
-        halp::toggle<"Partial 10"> p10;
-        halp::toggle<"Partial 11"> p11;
-        halp::toggle<"Partial 12"> p12;
-
-        // Per-partial rank mode: on (default) = the rank is drawn
-        // aleatorically in [Low Harm, High Harm] when the partial opens;
-        // off = the partial uses its Rank N knob, and follows it live.
         halp::toggle<"Random 1",  halp::toggle_setup{.init = true}> rnd1;
+        int_knob<"Rank 1",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> rank1;
+        halp::toggle<"Partial 2">  p2;
         halp::toggle<"Random 2",  halp::toggle_setup{.init = true}> rnd2;
+        int_knob<"Rank 2",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 14.0f}> rank2;
+        halp::toggle<"Partial 3">  p3;
         halp::toggle<"Random 3",  halp::toggle_setup{.init = true}> rnd3;
+        int_knob<"Rank 3",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 15.0f}> rank3;
+        halp::toggle<"Partial 4">  p4;
         halp::toggle<"Random 4",  halp::toggle_setup{.init = true}> rnd4;
+        int_knob<"Rank 4",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 16.0f}> rank4;
+        halp::toggle<"Partial 5">  p5;
         halp::toggle<"Random 5",  halp::toggle_setup{.init = true}> rnd5;
+        int_knob<"Rank 5",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 17.0f}> rank5;
+        halp::toggle<"Partial 6">  p6;
         halp::toggle<"Random 6",  halp::toggle_setup{.init = true}> rnd6;
+        int_knob<"Rank 6",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 18.0f}> rank6;
+        halp::toggle<"Partial 7">  p7;
         halp::toggle<"Random 7",  halp::toggle_setup{.init = true}> rnd7;
+        int_knob<"Rank 7",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 19.0f}> rank7;
+        halp::toggle<"Partial 8">  p8;
         halp::toggle<"Random 8",  halp::toggle_setup{.init = true}> rnd8;
+        int_knob<"Rank 8",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 20.0f}> rank8;
+        halp::toggle<"Partial 9">  p9;
         halp::toggle<"Random 9",  halp::toggle_setup{.init = true}> rnd9;
+        int_knob<"Rank 9",  halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 21.0f}> rank9;
+        halp::toggle<"Partial 10"> p10;
         halp::toggle<"Random 10", halp::toggle_setup{.init = true}> rnd10;
+        int_knob<"Rank 10", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 22.0f}> rank10;
+        halp::toggle<"Partial 11"> p11;
         halp::toggle<"Random 11", halp::toggle_setup{.init = true}> rnd11;
+        int_knob<"Rank 11", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 23.0f}> rank11;
+        halp::toggle<"Partial 12"> p12;
         halp::toggle<"Random 12", halp::toggle_setup{.init = true}> rnd12;
-
-        // Manually chosen harmonic rank per partial, used when Random N is
-        // off. Not constrained by [Low Harm, High Harm].
-        unit_knob<"Rank 1",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> rank1;
-        unit_knob<"Rank 2",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 14.0f}> rank2;
-        unit_knob<"Rank 3",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 15.0f}> rank3;
-        unit_knob<"Rank 4",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 16.0f}> rank4;
-        unit_knob<"Rank 5",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 17.0f}> rank5;
-        unit_knob<"Rank 6",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 18.0f}> rank6;
-        unit_knob<"Rank 7",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 19.0f}> rank7;
-        unit_knob<"Rank 8",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 20.0f}> rank8;
-        unit_knob<"Rank 9",  "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 21.0f}> rank9;
-        unit_knob<"Rank 10", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 22.0f}> rank10;
-        unit_knob<"Rank 11", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 23.0f}> rank11;
-        unit_knob<"Rank 12", "rank", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 24.0f}> rank12;
+        int_knob<"Rank 12", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 24.0f}> rank12;
 
         // Lowest / highest harmonic rank eligible for the aleatoric draws
         // (the anchor rank assigned to the input pitch, and every partial in
