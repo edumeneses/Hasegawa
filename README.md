@@ -47,8 +47,8 @@ partials**, mixed into a single master output. Nothing is recorded or frozen.
 An open partial continuously pitch-shifts the live input until it is closed.
 
 1. **Anchor**: when the first partial opens, the plugin sets a harmonic rank
-   `r` (the *anchor*). With *Random Anchor* on (default), `r` is drawn
-   uniformly at random from `[Low Harm, High Harm]`. With *Random Anchor*
+   `r` (the *anchor*). With *Rnd Anchor* on (default), `r` is drawn
+   uniformly at random from `[Low Harm, High Harm]`. With *Rnd Anchor*
    off, `r` is the value of the *Anchor* knob, and the open partials retune
    when the knob moves. The incoming pitch is *declared* to be partial `r` of
    a virtual fundamental `f0 = f_input / r`. The anchor holds as long as at
@@ -83,8 +83,8 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 |--------------------|--------|----------|
 | **Low Harm**        | 1 to 34 | Lowest harmonic rank eligible for the aleatoric draws (anchor and partials). |
 | **High Harm**       | 1 to 34 | Highest harmonic rank eligible for the aleatoric draws (anchor and partials). |
-| **Random Anchor**   | toggle  | Anchor mode. On (default): the anchor is drawn aleatorically in [*Low Harm*, *High Harm*] when the first partial opens. Off: the anchor comes from the *Anchor* knob. |
-| **Anchor**          | 1 to 34 | Manually chosen anchor rank, used when *Random Anchor* is off. Open partials retune live when it moves. Not constrained by [*Low Harm*, *High Harm*]. |
+| **Rnd Anchor**      | toggle  | Anchor mode. On (default): the anchor is drawn aleatorically in [*Low Harm*, *High Harm*] when the first partial opens. Off: the anchor comes from the *Anchor* knob. |
+| **Anchor**          | 1 to 34 | Manually chosen anchor rank, used when *Rnd Anchor* is off. Open partials retune live when it moves. Not constrained by [*Low Harm*, *High Harm*]. |
 | **Partial 1 to 12** | toggle  | On: pick a rank (see *Random N* / *Rank N*) and open that voice (real-time harmonization of the live input, added to the master mix). Off: close it. Cycle off/on to redraw. |
 | **Random 1 to 12**  | toggle  | Rank mode per partial. On (default): the rank is drawn aleatorically in [*Low Harm*, *High Harm*] when the partial opens. Off: the partial uses its *Rank N* knob. |
 | **Rank 1 to 12**    | 1 to 34 | Manually chosen harmonic rank, used when *Random N* is off. An open partial follows this knob live. Not constrained by [*Low Harm*, *High Harm*]. |
@@ -116,11 +116,11 @@ master on both channels.
 
 To process or spatialize partials separately, run one instance per partial in
 parallel (for example, one REAPER track per partial, each fed by the same
-source). With *Random Anchor* on, each instance draws its own anchor, so the
+source). With *Rnd Anchor* on, each instance draws its own anchor, so the
 instances belong to different series. To keep them on one virtual
 fundamental, set every instance as follows:
 
-- *Random Anchor* off, with the same *Anchor* value on every instance.
+- *Rnd Anchor* off, with the same *Anchor* value on every instance.
 - One partial open per instance, with *Random N* off and its own *Rank N*.
 - *Dry/Wet* at 1 on every instance except at most one, so the dry signal is
   heard once.

@@ -253,7 +253,7 @@ void Hasegawa::operator()(int frames) {
     prev_stop_all = inputs.stop_all.value;
 
     // Manual anchor follows its knob live: the open voices keep their ranks
-    // and retune to the new series. Switching back to Random Anchor keeps the
+    // and retune to the new series. Switching back to Rnd Anchor keeps the
     // current anchor until every voice has closed.
     const bool random_anchor = inputs.rnd_anchor.value;
     const int manual_anchor = std::clamp((int)std::lround(inputs.anchor.value), 1, MAX_RANK);

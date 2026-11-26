@@ -109,7 +109,7 @@ struct Hasegawa {
         //    the shared virtual-fundamental series and open that voice (a
         //    real-time pitch-shifted copy of the input, added to the master
         //    mix). Off = close it. The series anchor (the rank assigned to
-        //    the incoming pitch, see Random Anchor / Anchor) is set when the
+        //    the incoming pitch, see Rnd Anchor / Anchor) is set when the
         //    first voice opens and holds until every voice is closed, so all
         //    open partials belong to one virtual fundamental.
         //  - Random N: on (default) = the rank is drawn aleatorically in
@@ -173,7 +173,7 @@ struct Hasegawa {
         // ranks) belong to one virtual fundamental, which lets each instance
         // carry a single partial on its own track. Declared after Dry/Wet so
         // the VST3 parameter IDs of the older controls stay unchanged.
-        halp::toggle<"Random Anchor", halp::toggle_setup{.init = true}> rnd_anchor;
+        halp::toggle<"Rnd Anchor", halp::toggle_setup{.init = true}> rnd_anchor;
         int_knob<"Anchor", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> anchor;
         // Dynamic buses: the host decides the channel count. Channel 0 of the
         // input is the harmonizer source (extra input channels are ignored).
