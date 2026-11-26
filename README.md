@@ -15,8 +15,8 @@ model into a real-time instrument: the incoming pitch is aleatorically
 assigned a harmonic rank, and the plugin harmonizes it with up to 12
 additional pitches drawn from the same harmonic series; when the ranks sit
 high enough in the series, the sense of tonality may become obscured. Each of
-the 12 harmonized pitches is an individually switchable voice with its own
-output channel.
+the 12 harmonized pitches is an individually switchable voice, and the plugin
+outputs their mix.
 
 Since the ideal harmonic series is infinite, any combination of notes can be
 described as harmonics of some fundamental; the analysis only becomes
@@ -43,28 +43,30 @@ ones; the *Low Harm* and *High Harm* controls sweep along exactly that axis.
 ## How it works
 
 The plugin is a **real-time harmonizer** with **12 individually switchable
-partials**, each rendered to its **own mono output channel** (a master channel
-carries a mono mix). Nothing is recorded or frozen: an open partial
-continuously pitch-shifts the live input until it is closed.
+partials**, mixed into a single master output. Nothing is recorded or frozen.
+An open partial continuously pitch-shifts the live input until it is closed.
 
-1. **Aleatoric anchor** — when the first partial opens, a harmonic rank
-   `r` (the *anchor*) is drawn uniformly at random from
-   `[Low Harm, High Harm]`. The incoming pitch is *declared* to be partial
-   `r` of a virtual fundamental `f0 = f_input / r`. The anchor holds as long
-   as at least one partial is open, so everything sounding belongs to one
-   series; it is cleared when all partials close (or on *Stop All*).
-2. **Opening a partial** — toggling *Partial N* on picks that voice's rank
-   `rank_N` and opens a voice at `f_N = f0 · rank_N`: a pitch shift of the
-   live input by the just ratio `rank_N / r`. In *Random* mode (default) the
+1. **Anchor**: when the first partial opens, the plugin sets a harmonic rank
+   `r` (the *anchor*). With *Random Anchor* on (default), `r` is drawn
+   uniformly at random from `[Low Harm, High Harm]`. With *Random Anchor*
+   off, `r` is the value of the *Anchor* knob, and the open partials retune
+   when the knob moves. The incoming pitch is *declared* to be partial `r` of
+   a virtual fundamental `f0 = f_input / r`. The anchor holds as long as at
+   least one partial is open, so everything sounding belongs to one series.
+   It is cleared when all partials close (or on *Stop All*).
+2. **Opening a partial**: toggling *Partial N* on picks that voice's rank
+   `rank_N` and opens a voice at `f_N = f0 · rank_N` (a pitch shift of the
+   live input by the just ratio `rank_N / r`). In *Random* mode (default) the
    rank is drawn from the same `[Low Harm, High Harm]` range, distinct from
-   the anchor and from the other open partials whenever the range allows; in
+   the anchor and from the other open partials whenever the range allows. In
    manual mode the rank comes from the *Rank N* knob, and the open voice
    follows the knob live. Toggling the partial off closes the voice.
-3. **Resynthesis** — each voice is a phase-vocoder transposition of the live
-   input (STFT 2048, hop 512, Hann). The analysis stage — one forward FFT per
-   hop — is shared by all voices; each open voice scatters the analyzed
-   spectrum to its pitch-scaled bins with its own running synthesis phase and
-   renders through its own inverse FFT + overlap-add to its own channel.
+3. **Resynthesis**: each voice is a phase-vocoder transposition of the live
+   input (STFT 2048, hop 512, Hann). The analysis stage (one forward FFT per
+   hop) is shared by all voices. Each open voice scatters the analyzed
+   spectrum to its pitch-scaled bins with its own running synthesis phase,
+   and the voices' spectra are summed and rendered through a single inverse
+   FFT and overlap-add.
 
 The ratios are pure rank arithmetic (`rank_N / r`), so the harmonizer tracks
 whatever the input does — dynamics, timbre, glissandi — as parallel just-ratio
@@ -79,13 +81,15 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 
 | Control            | Range  | Function |
 |--------------------|--------|----------|
-| **Low Harm**       | 1 – 34 | Lowest harmonic rank eligible for the aleatoric draw. |
-| **High Harm**      | 1 – 34 | Highest harmonic rank eligible for the aleatoric draw. |
-| **Partial 1 – 12** | toggle | On: pick a rank (see *Random N* / *Rank N*) and open that voice (real-time harmonization of the live input on its own output channel). Off: close it. Cycle off/on to redraw. |
-| **Random 1 – 12**  | toggle | Rank mode per partial. On (default): the rank is drawn aleatorically in [*Low Harm*, *High Harm*] when the partial opens. Off: the partial uses its *Rank N* knob. |
-| **Rank 1 – 12**    | 1 – 34 | Manually chosen harmonic rank, used when *Random N* is off; an open partial follows this knob live. Not constrained by [*Low Harm*, *High Harm*]. |
-| **Stop All**       | bang   | Closes every partial and clears the series anchor. Partial toggles left on stay closed until cycled off/on. |
-| **Dry/Wet**        | 0 – 1  | Crossfade, on the master channel only, between the live input and the mono mix of all partials. |
+| **Low Harm**        | 1 to 34 | Lowest harmonic rank eligible for the aleatoric draws (anchor and partials). |
+| **High Harm**       | 1 to 34 | Highest harmonic rank eligible for the aleatoric draws (anchor and partials). |
+| **Random Anchor**   | toggle  | Anchor mode. On (default): the anchor is drawn aleatorically in [*Low Harm*, *High Harm*] when the first partial opens. Off: the anchor comes from the *Anchor* knob. |
+| **Anchor**          | 1 to 34 | Manually chosen anchor rank, used when *Random Anchor* is off. Open partials retune live when it moves. Not constrained by [*Low Harm*, *High Harm*]. |
+| **Partial 1 to 12** | toggle  | On: pick a rank (see *Random N* / *Rank N*) and open that voice (real-time harmonization of the live input, added to the master mix). Off: close it. Cycle off/on to redraw. |
+| **Random 1 to 12**  | toggle  | Rank mode per partial. On (default): the rank is drawn aleatorically in [*Low Harm*, *High Harm*] when the partial opens. Off: the partial uses its *Rank N* knob. |
+| **Rank 1 to 12**    | 1 to 34 | Manually chosen harmonic rank, used when *Random N* is off. An open partial follows this knob live. Not constrained by [*Low Harm*, *High Harm*]. |
+| **Stop All**        | bang    | Closes every partial and clears the series anchor. Partial toggles left on stay closed until cycled off/on. |
+| **Dry/Wet**         | 0 to 1  | Crossfade between the live input and the mix of the open partials. |
 
 This maps the original message-based specification
 (`play <bufferNumber> <number_of_harmonics> <low_harm> <high_harm>`, `stop`
@@ -96,23 +100,33 @@ at the moment a partial opens.
 
 ## Audio I/O
 
-The buses are dynamic — the plugin adapts to however many channels the host
-provides (a fixed 13-channel bus crashes hosts that hand the plugin a stereo
-buffer, so the channel count is negotiated instead):
+The buses are dynamic, so the plugin adapts to the channel count the host
+provides:
 
-- **Input**: channel 1 is the harmonizer source (mono); extra input channels
+- **Input**: channel 1 is the harmonizer source (mono). Extra input channels
   are ignored.
-- **Output**, up to 13 channels used:
-  - channel **1**: master (mono mix of all partials, normalized by
-    1/√(open partials) and crossfaded with the dry input by *Dry/Wet*);
-  - channels **2 – 13**: partials 1 – 12, each the pure (wet) output of one
-    voice, always at full level regardless of *Dry/Wet*.
+- **Output**: the master (the mix of the open partials, normalized by
+  1/√(open partials) and crossfaded with the dry input by *Dry/Wet*), copied
+  to every output channel.
 
-On a plain stereo track you hear the master on channel 1 (and partial 1 on
-channel 2). For the full fan-out — e.g. per-partial spatialization — give the
-plugin 13 channels: in REAPER, set the track channel count to 16 (nearest
-even ≥ 13) and route with the plugin pin editor; partials without a host
-channel simply stay in the master mix.
+A mono track therefore gets a mono output, and a stereo track gets the same
+master on both channels.
+
+## One partial per track
+
+To process or spatialize partials separately, run one instance per partial in
+parallel (for example, one REAPER track per partial, each fed by the same
+source). With *Random Anchor* on, each instance draws its own anchor, so the
+instances belong to different series. To keep them on one virtual
+fundamental, set every instance as follows:
+
+- *Random Anchor* off, with the same *Anchor* value on every instance.
+- One partial open per instance, with *Random N* off and its own *Rank N*.
+- *Dry/Wet* at 1 on every instance except at most one, so the dry signal is
+  heard once.
+
+Random rank draws also work with a shared manual anchor. However, each
+instance draws independently, so two instances can land on the same rank.
 
 ## Download
 

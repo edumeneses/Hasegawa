@@ -58,18 +58,17 @@ static inline float wrap_phase(float x) {
 Hasegawa::State::State() : fft(FFT_SIZE) {
     in_ring.resize(FFT_SIZE, 0.0f);
     td_buf.resize(FFT_SIZE, 0.0f);
+    out_ring.resize(FFT_SIZE, 0.0f);
     spec.resize(FFT_BINS);
-    voice_spec.resize(FFT_BINS);
+    mix_spec.resize(FFT_BINS);
     mag.resize(FFT_BINS, 0.0f);
     tf.resize(FFT_BINS, 0.0f);
     prev_phase.resize(FFT_BINS, 0.0f);
     out_mag.resize(FFT_BINS, 0.0f);
     out_tf.resize(FFT_BINS, 0.0f);
 
-    for (auto& v : voices) {
+    for (auto& v : voices)
         v.synth_phase.resize(FFT_BINS, 0.0f);
-        v.out_ring.resize(FFT_SIZE, 0.0f);
-    }
 
     window.resize(FFT_SIZE);
     for(int i = 0; i < FFT_SIZE; ++i) {
@@ -80,10 +79,10 @@ Hasegawa::State::State() : fft(FFT_SIZE) {
 void Hasegawa::State::reset() {
     std::fill(in_ring.begin(), in_ring.end(), 0.0f);
     std::fill(prev_phase.begin(), prev_phase.end(), 0.0f);
+    std::fill(out_ring.begin(), out_ring.end(), 0.0f);
     for (auto& v : voices) {
         v.active = false;
         std::fill(v.synth_phase.begin(), v.synth_phase.end(), 0.0f);
-        std::fill(v.out_ring.begin(), v.out_ring.end(), 0.0f);
     }
     widx = 0;
     ridx = 0;
@@ -130,9 +129,12 @@ void Hasegawa::State::synthesize() {
     const float gain_comp = 2.0f / 3.0f; // Hann^2 @ 75% overlap -> 1.5
 
     // Phase-vocoder transpose per voice: scatter each analysis partial to its
-    // pitch-scaled bin, advance that bin's phase at the target frequency, and
-    // render into the voice's own overlap-add ring (one inverse FFT per open
-    // voice, since each has its own output channel).
+    // pitch-scaled bin and advance that bin's phase at the target frequency.
+    // The inverse FFT is linear, so the voices' spectra are summed and
+    // rendered through a single inverse FFT and overlap-add.
+    if (num_active() == 0) return;
+
+    std::fill(mix_spec.begin(), mix_spec.end(), std::complex<float>{0.0f, 0.0f});
     for (auto& v : voices) {
         if (!v.active) continue;
 
@@ -149,19 +151,17 @@ void Hasegawa::State::synthesize() {
         for (int tb = 0; tb < FFT_BINS; ++tb) {
             if (out_mag[tb] > 0.0f) {
                 v.synth_phase[tb] = wrap_phase(v.synth_phase[tb] + TWO_PI * out_tf[tb] * HOP_SIZE / FFT_SIZE);
-                voice_spec[tb] = std::polar(out_mag[tb], v.synth_phase[tb]);
-            } else {
-                voice_spec[tb] = {0.0f, 0.0f};
+                mix_spec[tb] += std::polar(out_mag[tb], v.synth_phase[tb]);
             }
         }
+    }
 
-        fft.inverse(voice_spec, td_buf);
+    fft.inverse(mix_spec, td_buf);
 
-        for (int j = 0; j < FFT_SIZE; ++j) {
-            int idx = ridx + j;
-            if (idx >= FFT_SIZE) idx -= FFT_SIZE;
-            v.out_ring[idx] += td_buf[j] * window[j] * gain_comp;
-        }
+    for (int j = 0; j < FFT_SIZE; ++j) {
+        int idx = ridx + j;
+        if (idx >= FFT_SIZE) idx -= FFT_SIZE;
+        out_ring[idx] += td_buf[j] * window[j] * gain_comp;
     }
 }
 
@@ -176,15 +176,18 @@ void Hasegawa::prepare(halp::setup info) {
     prev_stop_all = false;
 }
 
-void Hasegawa::open_voice(int i, int low, int high, bool random, int manual_rank) {
+void Hasegawa::open_voice(int i, int low, int high, bool random, int manual_rank,
+                          bool random_anchor, int manual_anchor) {
     auto& st = state;
 
-    // Aleatoric anchor: the incoming pitch is assigned harmonic rank
-    // `anchor_rank` of a virtual fundamental f0 = f_input / anchor_rank.
-    // Drawn when the first voice opens; held while any voice is open so all
-    // partials belong to one series.
+    // Anchor: the incoming pitch is assigned harmonic rank `anchor_rank` of a
+    // virtual fundamental f0 = f_input / anchor_rank. It is set when the
+    // first voice opens (drawn, or from the Anchor knob) and held while any
+    // voice is open, so all partials belong to one series.
     if (st.num_active() == 0)
-        anchor_rank = std::uniform_int_distribution<int>(low, high)(rng);
+        anchor_rank = random_anchor
+                          ? std::uniform_int_distribution<int>(low, high)(rng)
+                          : manual_anchor;
 
     int rank;
     if (random) {
@@ -225,6 +228,12 @@ void Hasegawa::close_voice(int i) {
         anchor_rank = 0;
 }
 
+void Hasegawa::retune_voices() {
+    for (auto& v : state.voices)
+        if (v.active)
+            v.ratio = (float)v.rank / (float)anchor_rank;
+}
+
 void Hasegawa::operator()(int frames) {
     const int nch_in = inputs.audio_in.channels;
     const int nch_out = outputs.audio_out.channels;
@@ -242,6 +251,16 @@ void Hasegawa::operator()(int frames) {
         anchor_rank = 0;
     }
     prev_stop_all = inputs.stop_all.value;
+
+    // Manual anchor follows its knob live: the open voices keep their ranks
+    // and retune to the new series. Switching back to Random Anchor keeps the
+    // current anchor until every voice has closed.
+    const bool random_anchor = inputs.rnd_anchor.value;
+    const int manual_anchor = std::clamp((int)std::lround(inputs.anchor.value), 1, MAX_RANK);
+    if (!random_anchor && anchor_rank != 0 && anchor_rank != manual_anchor) {
+        anchor_rank = manual_anchor;
+        retune_voices();
+    }
 
     const bool cur[MAX_PARTIALS] = {
         inputs.p1.value,  inputs.p2.value,  inputs.p3.value,  inputs.p4.value,
@@ -263,7 +282,8 @@ void Hasegawa::operator()(int frames) {
 
         // Edge-triggered: after Stop All, a toggle left on stays closed until
         // it is cycled off and on again.
-        if (cur[i] && !prev_p[i]) open_voice(i, low, high, rnd[i], manual);
+        if (cur[i] && !prev_p[i])
+            open_voice(i, low, high, rnd[i], manual, random_anchor, manual_anchor);
         else if (!cur[i] && prev_p[i]) close_voice(i);
         prev_p[i] = cur[i];
 
@@ -282,9 +302,6 @@ void Hasegawa::operator()(int frames) {
                            ? inputs.audio_in.channel(0, frames).data()
                            : nullptr;
     float* master = outputs.audio_out.channel(0, frames).data();
-    float* voice_out[MAX_PARTIALS] = {};
-    for (int i = 0; i < MAX_PARTIALS && 1 + i < nch_out; ++i)
-        voice_out[i] = outputs.audio_out.channel(1 + i, frames).data();
 
     // Master normalisation: 1/sqrt(open voices), smoothed (~10 ms) to avoid
     // steps when voices open or close.
@@ -306,21 +323,17 @@ void Hasegawa::operator()(int frames) {
             st.hop_ctr = 0;
         }
 
-        // 3. Pop the oldest synthesised sample of every voice (rings must
-        //    drain even when the host provides no channel for them) to its
-        //    own output channel, and sum them for the master.
-        float sum = 0.0f;
-        for (int v = 0; v < MAX_PARTIALS; ++v) {
-            auto& ring = st.voices[v].out_ring;
-            const float wet = ring[st.ridx];
-            ring[st.ridx] = 0.0f;
-            if (voice_out[v]) voice_out[v][i] = wet;
-            sum += wet;
-        }
+        // 3. Pop the oldest synthesised sample of the summed voices.
+        const float wet = st.out_ring[st.ridx];
+        st.out_ring[st.ridx] = 0.0f;
         if (++st.ridx >= FFT_SIZE) st.ridx = 0;
 
         // 4. Master: dry/wet crossfade against the normalised voice mix.
         st.master_gain += smooth * (target_gain - st.master_gain);
-        master[i] = (dry * (1.0f - mix)) + (sum * st.master_gain * mix);
+        master[i] = (dry * (1.0f - mix)) + (wet * st.master_gain * mix);
     }
+
+    // 5. Same master on every other channel the host provides.
+    for (int c = 1; c < nch_out; ++c)
+        std::copy_n(master, frames, outputs.audio_out.channel(c, frames).data());
 }
