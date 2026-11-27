@@ -31,12 +31,14 @@ set(AVND_USES_EXCEPTIONS ON CACHE BOOL "" FORCE)
 find_package(Avendish QUIET)
 if(NOT Avendish_FOUND)
   include(FetchContent)
-  # TODO: revert to celtera/avendish once the VSTGUI editor is merged upstream.
-  # Using the fork branch that adds a self-contained VSTGUI VST3 editor.
+  # TODO: revert to celtera/avendish once the VSTGUI editor
+  # (celtera/avendish#139) and the VST3 list parameters are merged upstream.
+  # Using the fork branch that combines both: the self-contained VSTGUI VST3
+  # editor, with dropdowns for list parameters such as Source.
   FetchContent_Declare(
     Avendish
     GIT_REPOSITORY "https://github.com/edumeneses/avendish"
-    GIT_TAG vst3-vstgui-editor)
+    GIT_TAG vst3-vstgui-editor-lists)
   FetchContent_Populate(Avendish)
   list(APPEND CMAKE_PREFIX_PATH "${avendish_SOURCE_DIR}")
   find_package(Avendish REQUIRED)

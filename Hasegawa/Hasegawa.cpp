@@ -297,11 +297,12 @@ void Hasegawa::operator()(int frames) {
         }
     }
 
-    // --- audio: mono processing on input channel 0 ---
-    const float* in0 = (nch_in > 0 && inputs.audio_in.samples)
-                           ? inputs.audio_in.channel(0, frames).data()
-                           : nullptr;
-    float* master = outputs.audio_out.channel(0, frames).data();
+    // --- audio: mono harmonizer source picked by Source ---
+    float* const* in = (nch_in > 0 && inputs.audio_in.samples) ? inputs.audio_in.samples : nullptr;
+    float* const* out = outputs.audio_out.samples;
+    const float* in_l = in ? in[0] : nullptr;
+    const float* in_r = in ? in[std::min(1, nch_in - 1)] : nullptr;
+    const auto source = inputs.source.value;
 
     // Master normalisation: 1/sqrt(open voices), smoothed (~10 ms) to avoid
     // steps when voices open or close.
@@ -310,10 +311,17 @@ void Hasegawa::operator()(int frames) {
 
     auto& st = state;
     for (int i = 0; i < frames; ++i) {
-        const float dry = in0 ? in0[i] : 0.0f;
+        float src = 0.0f;
+        if (in_l) {
+            switch (source) {
+                case inputs_t::source_t::R:  src = in_r[i]; break;
+                case inputs_t::source_t::LR: src = 0.5f * (in_l[i] + in_r[i]); break;
+                default:           src = in_l[i]; break;
+            }
+        }
 
-        // 1. Record the live input into the rolling analysis buffer.
-        st.in_ring[st.widx] = dry;
+        // 1. Record the source into the rolling analysis buffer.
+        st.in_ring[st.widx] = src;
         if (++st.widx >= FFT_SIZE) st.widx = 0;
 
         // 2. Trigger an analysis + synthesis frame every HOP_SIZE samples.
@@ -328,12 +336,16 @@ void Hasegawa::operator()(int frames) {
         st.out_ring[st.ridx] = 0.0f;
         if (++st.ridx >= FFT_SIZE) st.ridx = 0;
 
-        // 4. Master: dry/wet crossfade against the normalised voice mix.
+        // 4. Each output channel: its own dry input crossfaded against the
+        //    normalised voice mix. Channels past the last input reuse it.
+        //    Descending order, so a host that processes in place (output c
+        //    sharing input c's buffer) has every input read before its
+        //    buffer is overwritten.
         st.master_gain += smooth * (target_gain - st.master_gain);
-        master[i] = (dry * (1.0f - mix)) + (wet * st.master_gain * mix);
+        const float w = wet * st.master_gain * mix;
+        for (int c = nch_out - 1; c >= 0; --c) {
+            const float dry = in ? in[std::min(c, nch_in - 1)][i] : 0.0f;
+            out[c][i] = (dry * (1.0f - mix)) + w;
+        }
     }
-
-    // 5. Same master on every other channel the host provides.
-    for (int c = 1; c < nch_out; ++c)
-        std::copy_n(master, frames, outputs.audio_out.channel(c, frames).data());
 }

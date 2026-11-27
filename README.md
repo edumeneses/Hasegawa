@@ -89,7 +89,8 @@ close, increasingly obscure ("virtually noisy") as the ranks climb toward 34.
 | **Random 1 to 12**  | toggle  | Rank mode per partial. On (default): the rank is drawn aleatorically in [*Low Harm*, *High Harm*] when the partial opens. Off: the partial uses its *Rank N* knob. |
 | **Rank 1 to 12**    | 1 to 34 | Manually chosen harmonic rank, used when *Random N* is off. An open partial follows this knob live. Not constrained by [*Low Harm*, *High Harm*]. |
 | **Stop All**        | bang    | Closes every partial and clears the series anchor. Partial toggles left on stay closed until cycled off/on. |
-| **Dry/Wet**         | 0 to 1  | Crossfade between the live input and the mix of the open partials. |
+| **Dry/Wet**         | 0 to 1  | Crossfade between the live input (each output channel takes its own input channel) and the mix of the open partials. |
+| **Source**          | L, R, L+R | Harmonizer source. *L* (default): input channel 1. *R*: input channel 2. *L+R*: their average, for a stereo source. With a mono input, every choice reads that channel. |
 
 This maps the original message-based specification
 (`play <bufferNumber> <number_of_harmonics> <low_harm> <high_harm>`, `stop`
@@ -103,14 +104,20 @@ at the moment a partial opens.
 The buses are dynamic, so the plugin adapts to the channel count the host
 provides:
 
-- **Input**: channel 1 is the harmonizer source (mono). Extra input channels
-  are ignored.
-- **Output**: the master (the mix of the open partials, normalized by
-  1/√(open partials) and crossfaded with the dry input by *Dry/Wet*), copied
-  to every output channel.
+- **Input**: *Source* picks the harmonizer source (input channel 1, input
+  channel 2, or their average). With a single input channel, every choice
+  reads that channel.
+- **Output**: each output channel carries its own input channel as the dry
+  signal, crossfaded by *Dry/Wet* with the mix of the open partials
+  (normalized by 1/√(open partials), the same on every channel). An output
+  channel past the last input channel takes the last input channel as its dry
+  signal.
 
-A mono track therefore gets a mono output, and a stereo track gets the same
-master on both channels.
+A mono track therefore gets a mono output. On a stereo track the dry signal
+keeps its stereo image and the partials sit in the centre. The harmonizer
+follows a single pitch, so pick *L* or *R* when the source is on one side
+only, and *L+R* for a stereo source (averaging a one-sided signal halves its
+level).
 
 ## One partial per track
 

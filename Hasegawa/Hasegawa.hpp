@@ -11,6 +11,7 @@
 #include <complex>
 #include <cstdio>
 #include <random>
+#include <string_view>
 #include <vector>
 
 // PFFFT Header (single-precision real transform)
@@ -163,8 +164,9 @@ struct Hasegawa {
         // Bang: close every partial and clear the series anchor. Partial
         // toggles left on must be cycled off/on to reopen.
         halp::maintained_button<"Stop All"> stop_all;
-        // Crossfade between the live input (dry) and the normalized mix of the
-        // open partials (wet).
+        // Crossfade between the live input (dry, each output channel takes
+        // its own input channel) and the normalized mix of the open partials
+        // (wet, the same on every channel).
         halp::knob_f32<"Dry/Wet", halp::range{.min = 0.0f, .max = 1.0f, .init = 0.5f}> mix;
         // Anchor mode. On (default): the anchor rank is drawn aleatorically
         // in [Low Harm, High Harm] when the first partial opens. Off: the
@@ -175,14 +177,31 @@ struct Hasegawa {
         // the VST3 parameter IDs of the older controls stay unchanged.
         halp::toggle<"Rnd Anchor", halp::toggle_setup{.init = true}> rnd_anchor;
         int_knob<"Anchor", halp::range{.min = 1.0f, .max = (float)MAX_RANK, .init = 13.0f}> anchor;
-        // Dynamic buses: the host decides the channel count. Channel 0 of the
-        // input is the harmonizer source (extra input channels are ignored).
+        // Harmonizer source. L (default) and R read one input channel, L+R
+        // their average (for a stereo source). With a single input channel,
+        // every choice reads that channel. Declared last so the VST3
+        // parameter IDs of the older controls stay unchanged. Written out
+        // (as halp__enum would expand) so the labels can be "L+R".
+        struct source_t {
+            static clang_buggy_consteval auto name() { return std::string_view{"Source"}; }
+            enum enum_type { L, R, LR } value = L;
+            enum widget { enumeration, list, combobox };
+            struct range {
+                std::string_view values[3]{"L", "R", "L+R"};
+                enum_type init = L;
+            };
+            operator enum_type&() noexcept { return value; }
+            operator const enum_type&() const noexcept { return value; }
+            auto& operator=(enum_type t) noexcept { value = t; return *this; }
+        } source;
+        // Dynamic buses: the host decides the channel count.
         halp::audio_bus<"Input", float> audio_in;
     } inputs;
 
-    // Output: the master (mono mix of the open partials, dry/wet applied),
-    // copied to every channel the host provides. A mono track gets a mono
-    // output, and a stereo track gets the same master on both sides.
+    // Output: on every channel the host provides, that channel's dry input
+    // plus the wet mix of the open partials (mono, the same on every
+    // channel). A mono track gets a mono output. On a stereo track the dry
+    // image is kept and the partials sit in the centre.
     struct {
         halp::audio_bus<"Output", float> audio_out;
     } outputs;
@@ -315,6 +334,7 @@ struct Hasegawa {
         halp::item<&inputs_t::high_harm> high_harm;
         halp::item<&inputs_t::rnd_anchor> rnd_anchor;
         halp::item<&inputs_t::anchor> anchor;
+        halp::item<&inputs_t::source> source;
         halp::item<&inputs_t::stop_all> stop_all;
         halp::item<&inputs_t::mix> mix;
     };
