@@ -32,7 +32,8 @@ find_package(Avendish QUIET)
 if(NOT Avendish_FOUND)
   include(FetchContent)
   # TODO: revert to celtera/avendish once the VSTGUI editor
-  # (celtera/avendish#139) and the VST3 list parameters are merged upstream.
+  # (celtera/avendish#139) and the VST3 list parameters (celtera/avendish#235)
+  # are merged upstream.
   # Using the fork branch that combines both: the self-contained VSTGUI VST3
   # editor, with dropdowns for list parameters such as Source.
   FetchContent_Declare(
